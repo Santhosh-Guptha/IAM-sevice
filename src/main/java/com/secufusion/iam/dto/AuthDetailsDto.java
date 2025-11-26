@@ -16,6 +16,8 @@ public class AuthDetailsDto {
     private String realm;
     private String clientId;
     private String issuer;
+    private String jwkUri;
+    private String tokenUri;
     private String domain;
     private String status;
 }
