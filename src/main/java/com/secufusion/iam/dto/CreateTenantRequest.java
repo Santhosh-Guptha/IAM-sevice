@@ -29,6 +29,8 @@ public class CreateTenantRequest {
     private String adminLastName;
     private String adminUserName;
 
+    private String adminPhoneNumber;
+
     private String adminEmail;
 
     private String adminPassword;

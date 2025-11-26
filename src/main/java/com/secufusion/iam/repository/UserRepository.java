@@ -15,4 +15,10 @@ public interface UserRepository extends JpaRepository<User, Serializable> {
     Optional<User> findByEmail(String email);
 
     List<User> findByTenant(Tenant t);
+
+    Optional<User> findByUserNameAndTenant_TenantID(String userName, String tenantId);
+
+    Optional<User> findByPhoneNoAndTenant_TenantID(String phoneNumber, String tenantId);
+
+    Optional<User> findByEmailAndTenant_TenantID(String email, String tenantId);
 }

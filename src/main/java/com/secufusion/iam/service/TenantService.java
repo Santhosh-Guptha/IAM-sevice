@@ -12,19 +12,12 @@ import com.secufusion.iam.repository.AuthProviderConfigRepository;
 import com.secufusion.iam.repository.TenantRepository;
 import com.secufusion.iam.repository.TenantTypeRepository;
 import com.secufusion.iam.repository.UserRepository;
+import com.secufusion.iam.util.KeycloakAdminUtil;
 
-import jakarta.mail.*;
-import jakarta.mail.internet.InternetAddress;
-import jakarta.mail.internet.MimeMessage;
 import jakarta.ws.rs.WebApplicationException;
-import jakarta.ws.rs.core.Response;
 
-import org.keycloak.admin.client.CreatedResponseUtil;
-import org.keycloak.admin.client.Keycloak;
-import org.keycloak.admin.client.resource.UserResource;
 import org.keycloak.representations.idm.ClientRepresentation;
 import org.keycloak.representations.idm.RealmRepresentation;
-import org.keycloak.representations.idm.RoleRepresentation;
 import org.keycloak.representations.idm.UserRepresentation;
 
 import org.slf4j.Logger;
@@ -42,6 +35,15 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.*;
 
+/**
+ * Refactored TenantService that delegates all Keycloak interactions to KeycloakAdminUtil.
+ *
+ * Behavior preserved from previous implementation:
+ * - resumable provisioning flow
+ * - domain normalization (Option A: extract first segment and append extension)
+ * - Do NOT set password in Keycloak (Option C) — only trigger UPDATE_PASSWORD + VERIFY_EMAIL
+ * - All Keycloak direct calls replaced with kcUtil calls
+ */
 @Service
 public class TenantService {
 
@@ -54,36 +56,24 @@ public class TenantService {
     private UserRepository userRepository;
 
     @Autowired
-    private Keycloak keycloak;
-
-    @Autowired
     private AuthProviderConfigRepository authProviderConfigRepository;
 
     @Autowired
     private TenantTypeRepository tenantTypeRepository;
 
-    // Keycloak base/admin URL (already in your properties)
+    @Autowired
+    private KeycloakAdminUtil kcUtil;
+
     @Value("${keycloak.admin.server-url}")
     private String baseUrl;
 
+    /**
+     * Domain extension (e.g. ".motivitylabs.net") - must include leading dot.
+     * Example in application.properties: domain.extension=.motivitylabs.net
+     */
     @Value("${domain.extension}")
     private String extension;
 
-    // Realm token endpoint and redirect URL (already in your properties)
-//    @Value("${realm.url}")
-//    private String realmUrl;
-//
-//    @Value("${redirect.url}")
-//    private String redirectUrl;
-//
-//    // OAuth2 client for getAccessToken (moved from hardcoded)
-//    @Value("${tenant.client-id}")
-//    private String tenantClientId;
-//
-//    @Value("${tenant.client-secret}")
-//    private String tenantClientSecret;
-
-    // SMTP configuration (moved from hardcoded)
     @Value("${mail.smtp.host}")
     private String smtpHost;
 
@@ -105,15 +95,14 @@ public class TenantService {
     @Value("${mail.smtp.mail}")
     private String smtpMail;
 
-// ============================================================================ CREATE (RESUMABLE FLOW + OLD LOGIC INTACT)
+    // ============================================================================ CREATE (RESUMABLE FLOW)
 
     @Transactional
     public TenantResponse createTenant(CreateTenantRequest req) {
         log.info("Starting createTenant for realm='{}'", req.getTenantName());
 
         Optional<Tenant> existingOpt = tenantRepository.findByTenantName(req.getTenantName());
-        boolean realmExists = keycloak.realms().findAll().stream()
-                .anyMatch(r -> r.getRealm().equalsIgnoreCase(req.getTenantName()));
+        boolean realmExists = kcUtil.realmExists(req.getTenantName());
 
         log.debug("Existing tenant present={}, realmExistsInKeycloak={}",
                 existingOpt.isPresent(), realmExists);
@@ -134,36 +123,38 @@ public class TenantService {
             return resumeTenantSetup(req);
         }
 
-        // Validation from resumable service
+        // Validation
         validateInputForNew(req);
 
-        // Create tenant skeleton (from resumable)
+        // Create tenant skeleton
         Tenant tenant = buildTenantSkeleton(req);
         tenant.setStatus("CREATING");
         Tenant savedTenant = tenantRepository.save(tenant);
         log.info("Created tenant skeleton in DB. tenantId={}, status={}",
                 savedTenant.getTenantID(), savedTenant.getStatus());
 
-        // Admin skeleton (from resumable / old tenant service logic)
+        // Create admin skeleton
         User admin = buildAdminSkeleton(req, savedTenant);
         admin.setStatus("CREATING");
         User savedUser = userRepository.save(admin);
         log.info("Created admin user skeleton in DB. userId={}, username={}, status={}",
-                savedUser.getUserID(), savedUser.getUserName(), savedUser.getStatus());
+                savedUser.getPkUserId(), savedUser.getUserName(), savedUser.getStatus());
 
         savedTenant.setUsers(new ArrayList<>(List.of(savedUser)));
         savedTenant.setStatus("CREATED_LOCAL");
         tenantRepository.save(savedTenant);
         log.info("Updated tenant status to CREATED_LOCAL. tenantId={}", savedTenant.getTenantID());
 
-        // Transaction compensation (from old TenantService)
+        // Register rollback compensation: if DB rolls back, delete realm if created
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCompletion(int status) {
                 if (status == STATUS_ROLLED_BACK) {
                     try {
-                        keycloak.realm(req.getTenantName()).remove();
-                    } catch (Exception ignored) {
+                        log.warn("DB rollback detected for tenant '{}', attempting to delete realm.", req.getTenantName());
+                        kcUtil.deleteRealm(req.getTenantName());
+                    } catch (Exception e) {
+                        log.error("Compensation failed during realm deletion for '{}': {}", req.getTenantName(), e.getMessage(), e);
                     }
                 }
             }
@@ -199,8 +190,7 @@ public class TenantService {
             throw new KeycloakOperationException("EMAIL_ALREADY_EXISTS", 1004, "Email already exists.");
         }
 
-        boolean realmExists = keycloak.realms().findAll().stream()
-                .anyMatch(r -> r.getRealm().equalsIgnoreCase(req.getTenantName()));
+        boolean realmExists = kcUtil.realmExists(req.getTenantName());
         if (realmExists) {
             log.warn("Validation failed: realm already exists in Keycloak. realm={}", req.getTenantName());
             throw new KeycloakOperationException("REALM_ALREADY_EXISTS", 1005, "Realm already exists.");
@@ -234,13 +224,13 @@ public class TenantService {
         admin.setLastName(req.getAdminLastName());
         admin.setUserName(req.getAdminUserName());
         admin.setEmail(req.getAdminEmail());
-        admin.setPhoneNo(req.getPhoneNo());
+        admin.setPhoneNo(req.getAdminPhoneNumber());
         admin.setTenant(tenant);
         admin.setDefaultUser(true);
         return admin;
     }
 
-// ============================================================================ RESUME FLOW (from TenantResumableService)
+    // ============================================================================ RESUME FLOW
 
     @Transactional
     public TenantResponse resumeTenantSetup(CreateTenantRequest req) {
@@ -298,39 +288,36 @@ public class TenantService {
         };
     }
 
-// ============================================================================ REALM
+    // ============================================================================ REALM
 
     private void createRealm(Tenant tenant, CreateTenantRequest req) {
-        log.info("Creating Keycloak realm if not exists. realm={}", req.getTenantName());
+        log.info("Ensuring Keycloak realm exists for '{}'", req.getTenantName());
 
-        boolean existsBefore = keycloak.realms().findAll().stream()
-                .anyMatch(r -> r.getRealm().equalsIgnoreCase(req.getTenantName()));
-
+        boolean existsBefore = kcUtil.realmExists(req.getTenantName());
         if (!existsBefore) {
-            log.debug("Realm does not exist, creating new realm. realm={}", req.getTenantName());
-
             RealmRepresentation realmRep = new RealmRepresentation();
             realmRep.setRealm(req.getTenantName());
             realmRep.setEnabled(true);
             realmRep.setSmtpServer(getSmtpConfig());
 
             try {
-                keycloak.realms().create(realmRep);
-                log.info("Realm created in Keycloak. realm={}", req.getTenantName());
-            } catch (WebApplicationException ex) {
-                int status = ex.getResponse().getStatus();
-                if (status == 409) {
-                    throw new KeycloakOperationException("REALM_ALREADY_EXISTS", 1005,
-                            "A tenant environment with this name already exists.");
+                kcUtil.createRealm(realmRep);
+            } catch (Exception ex) {
+                if (ex instanceof WebApplicationException) {
+                    int status = ((WebApplicationException) ex).getResponse().getStatus();
+                    if (status == 409) {
+                        log.warn("Realm already exists (conflict) for {}", req.getTenantName());
+                        tenant.setStatus("REALM_CREATED");
+                        tenantRepository.save(tenant);
+                        return;
+                    }
                 }
+                log.error("Failed to create realm {}: {}", req.getTenantName(), ex.getMessage(), ex);
                 throw new KeycloakOperationException("REALM_CREATION_FAILED", 1006,
                         "Unable to create tenant environment.");
-            } catch (Exception ex) {
-                throw new KeycloakOperationException("INTERNAL_ERROR", 1013,
-                        "Unexpected error occurred, please try again later.");
             }
         } else {
-            log.info("Realm already exists in Keycloak, skipping creation. realm={}", req.getTenantName());
+            log.info("Realm already exists in Keycloak for '{}', skipping creation.", req.getTenantName());
         }
 
         tenant.setStatus("REALM_CREATED");
@@ -338,20 +325,14 @@ public class TenantService {
         log.info("Tenant status updated to REALM_CREATED. tenantId={}", tenant.getTenantID());
     }
 
-// ============================================================================ CLIENT
+    // ============================================================================ CLIENT
 
     private void createClient(Tenant tenant, CreateTenantRequest req) {
-        log.info("Creating Keycloak client if not exists. realm={}, clientId={}",
-                req.getTenantName(), req.getTenantName());
+        log.info("Ensuring Keycloak client exists for realm={} clientId={}", req.getTenantName(), req.getTenantName());
 
-        boolean existsBefore = keycloak.realm(req.getTenantName())
-                .clients().findAll().stream()
-                .anyMatch(c -> c.getClientId().equalsIgnoreCase(req.getTenantName()));
-
+        boolean existsBefore = kcUtil.clientExists(req.getTenantName(), req.getTenantName());
         if (!existsBefore) {
             String redirectUri = normalizeDomainForRedirect(req.getDomain());
-            log.debug("Client does not exist, creating new client. clientId={}, redirectUri={}",
-                    req.getTenantName(), redirectUri);
 
             ClientRepresentation clientRep = new ClientRepresentation();
             clientRep.setClientId(req.getTenantName());
@@ -363,31 +344,28 @@ public class TenantService {
             clientRep.setStandardFlowEnabled(true);
             clientRep.setEnabled(true);
 
-            Response resp = keycloak.realm(req.getTenantName()).clients().create(clientRep);
-            int clientStatus = resp.getStatus();
-            log.debug("Keycloak client creation response status={}", clientStatus);
-            if (clientStatus != 201 && clientStatus != 409) {
+            try {
+                kcUtil.createClient(req.getTenantName(), clientRep);
+            } catch (Exception e) {
+                log.error("Failed to create client for realm {}: {}", req.getTenantName(), e.getMessage(), e);
                 throw new KeycloakOperationException("CLIENT_CREATION_FAILED", 1008,
                         "Unable to configure login access.");
             }
-            resp.close();
-
-            log.info("Client created in Keycloak. clientId={}, realm={}",
-                    req.getTenantName(), req.getTenantName());
         } else {
-            log.info("Client already exists in Keycloak, skipping creation. clientId={}, realm={}",
-                    req.getTenantName(), req.getTenantName());
+            log.info("Client already exists in Keycloak for realm={}, skipping creation.", req.getTenantName());
         }
 
         tenant.setStatus("CLIENT_CREATED");
+        // Save the domain in DB as normalized DB format
+        tenant.setDomain(normalizeDomainForDB(req.getDomain()));
         tenantRepository.save(tenant);
-        log.info("Tenant status updated to CLIENT_CREATED. tenantId={}", tenant.getTenantID());
+        log.info("Tenant status updated to CLIENT_CREATED and domain saved. tenantId={}", tenant.getTenantID());
     }
 
-// ============================================================================ USER
+    // ============================================================================ USER
 
     private void createKeycloakAdminUser(Tenant tenant, CreateTenantRequest req) {
-        log.info("Creating Keycloak admin user if not exists. realm={}, username={}",
+        log.info("Ensuring Keycloak admin user exists for realm={}, username={}",
                 req.getTenantName(), req.getAdminUserName());
 
         List<User> localUsers = tenant.getUsers();
@@ -396,12 +374,11 @@ public class TenantService {
             return new IllegalStateException("Default admin user not found.");
         });
 
-        List<UserRepresentation> existing =
-                keycloak.realm(req.getTenantName()).users().search(req.getAdminUserName(), true);
-
+        // Check Keycloak for existing user by username
+        List<UserRepresentation> existing = kcUtil.findUserByUsername(req.getTenantName(), req.getAdminUserName());
         if (!existing.isEmpty()) {
             String existingUserId = existing.get(0).getId();
-            log.info("Keycloak user already exists, linking to local admin. realm={}, username={}, keycloakUserId={}",
+            log.info("Keycloak user already exists, linking local admin. realm={}, username={}, keycloakUserId={}",
                     req.getTenantName(), req.getAdminUserName(), existingUserId);
 
             admin.setKeycloakUserId(existingUserId);
@@ -414,52 +391,46 @@ public class TenantService {
             return;
         }
 
-        log.debug("Keycloak admin user does not exist, creating new user. realm={}, username={}",
-                req.getTenantName(), req.getAdminUserName());
-
+        // Create new Keycloak admin user (do not set password per option C)
         try {
-            UserRepresentation user = new UserRepresentation();
-            user.setUsername(req.getAdminUserName());
-            user.setEmail(req.getAdminEmail());
-            user.setFirstName(req.getAdminFirstName());
-            user.setLastName(req.getAdminLastName());
-            user.setEnabled(true);
+            String createdUserId = kcUtil.createUser(
+                    req.getTenantName(),
+                    req.getAdminUserName(),
+                    req.getAdminEmail(),
+                    req.getAdminFirstName(),
+                    req.getAdminLastName()
+            );
 
-            Response response = keycloak.realm(req.getTenantName()).users().create(user);
-            String userId = CreatedResponseUtil.getCreatedId(response);
-            log.debug("Keycloak user creation response status={}, keycloakUserId={}",
-                    response.getStatus(), userId);
-            response.close();
+            // kcUtil.createUser returns null on conflict in this util, but we already checked above.
+            if (createdUserId == null) {
+                throw new KeycloakOperationException("USER_CREATION_FAILED", 1010,
+                        "Unable to create tenant admin user (conflict).");
+            }
 
-            UserResource userRes = keycloak.realm(req.getTenantName()).users().get(userId);
-            log.debug("Triggering executeActionsEmail for user. keycloakUserId={}", userId);
-            userRes.executeActionsEmail(List.of("UPDATE_PASSWORD", "VERIFY_EMAIL"));
+            // Trigger required actions: UPDATE_PASSWORD, VERIFY_EMAIL (no password set)
+            kcUtil.sendRequiredActionEmail(req.getTenantName(), createdUserId, List.of("UPDATE_PASSWORD", "VERIFY_EMAIL"));
 
-            ClientRepresentation realmMgmtClient =
-                    keycloak.realm(req.getTenantName()).clients().findByClientId("realm-management").get(0);
-            RoleRepresentation realmAdminRole =
-                    keycloak.realm(req.getTenantName())
-                            .clients().get(realmMgmtClient.getId())
-                            .roles().get("realm-admin").toRepresentation();
+            // Assign realm-admin role
+            kcUtil.assignRealmAdminRole(req.getTenantName(), createdUserId);
 
-            log.debug("Assigning realm-admin role to user. keycloakUserId={}, clientId={}",
-                    userId, realmMgmtClient.getId());
-            userRes.roles().clientLevel(realmMgmtClient.getId()).add(List.of(realmAdminRole));
-
-            admin.setKeycloakUserId(userId);
+            admin.setKeycloakUserId(createdUserId);
             admin.setStatus("ACTIVE");
             userRepository.save(admin);
 
             tenant.setStatus("USER_CREATED");
             tenantRepository.save(tenant);
             log.info("Tenant status updated to USER_CREATED (new user). tenantId={}", tenant.getTenantID());
+
+        } catch (KeycloakOperationException kex) {
+            throw kex;
         } catch (Exception e) {
+            log.error("Failed to create or configure admin user in Keycloak: {}", e.getMessage(), e);
             throw new KeycloakOperationException("USER_CREATION_FAILED", 1010,
                     "Unable to create tenant admin user.");
         }
     }
 
-// ============================================================================ FINALIZE + EMAIL
+    // ============================================================================ FINALIZE + EMAIL
 
     private void finalizeAndSendEmails(Tenant tenant, CreateTenantRequest req) {
         log.info("Finalizing tenant setup and sending welcome email. tenantId={}, adminEmail={}",
@@ -471,8 +442,9 @@ public class TenantService {
             tenant.setStatus("ACTIVE");
             tenantRepository.save(tenant);
 
-            sendWelcomeEmail(req.getAdminEmail(), loginUrl, req.getAdminUserName());
+            kcUtil.sendWelcomeEmail(req.getAdminEmail(), loginUrl, req.getAdminUserName());
             log.info("Tenant activated and welcome email sent successfully. tenantId={}", tenant.getTenantID());
+
         } catch (Exception e) {
             log.error("Failed to send welcome email or finalize tenant. tenantId={}, adminEmail={}, error={}",
                     tenant.getTenantID(), req.getAdminEmail(), e.getMessage(), e);
@@ -481,7 +453,7 @@ public class TenantService {
         }
     }
 
-// ============================================================================ AUTH PROVIDER CONFIG
+    // ============================================================================ SAVE AUTH CONFIG
 
     private void saveAuthProviderConfig(Tenant tenant, CreateTenantRequest req) {
         log.info("Saving auth provider config if not exists. tenantId={}", tenant.getTenantID());
@@ -512,41 +484,6 @@ public class TenantService {
         log.info("Auth provider config saved successfully. tenantId={}", tenant.getTenantID());
     }
 
-// ============================================================================ MAIL
-
-    public void sendWelcomeEmail(String to, String loginUrl, String username) throws MessagingException {
-        log.info("Sending welcome email. to={}, username={}", to, username);
-
-        Properties props = new Properties();
-        props.put("mail.smtp.host", smtpHost);
-        props.put("mail.smtp.port", smtpPort);
-        props.put("mail.smtp.auth", smtpAuth);
-        props.put("mail.smtp.starttls.enable", smtpStarttls);
-
-        Session session = Session.getInstance(
-                props,
-                new Authenticator() {
-                    protected PasswordAuthentication getPasswordAuthentication() {
-                        return new PasswordAuthentication(smtpUsername, smtpPassword);
-                    }
-                });
-
-        Message msg = new MimeMessage(session);
-        msg.setFrom(new InternetAddress(smtpMail, false));
-        msg.setRecipients(Message.RecipientType.TO, InternetAddress.parse(to));
-        msg.setSubject("Welcome to Secufusion");
-        msg.setContent(
-                "<h3>Welcome to Secufusion!</h3>" +
-                        "<p>Your admin account is ready.</p>" +
-                        "<p><b>Login:</b> <a href='" + loginUrl + "'>" + loginUrl + "</a></p>" +
-                        "<p><b>Username:</b> " + username + "</p><hr/>",
-                "text/html"
-        );
-
-        Transport.send(msg);
-        log.info("Welcome email sent successfully. to={}", to);
-    }
-
     private Map<String, String> getSmtpConfig() {
         log.debug("Building SMTP configuration map.");
         Map<String, String> smtp = new HashMap<>();
@@ -561,37 +498,15 @@ public class TenantService {
         return smtp;
     }
 
-// ============================================================================ ACCESS TOKEN (from TenantService, with properties)
+    // ============================================================================ HELPERS (domain + login URL)
 
-//    public Map<String, Object> getAccessToken(String code) {
-//        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
-//        form.add("grant_type", "authorization_code");
-//        form.add("code", code);
-//        form.add("redirect_uri", redirectUrl);
-//        form.add("client_id", tenantClientId);
-//        form.add("client_secret", tenantClientSecret);
-//
-//        HttpHeaders headers = new HttpHeaders();
-//        headers.setContentType(MediaType.APPLICATION_FORM_URLENCODED);
-//
-//        HttpEntity<MultiValueMap<String, String>> request = new HttpEntity<>(form, headers);
-//
-//        RestTemplate restTemplate = new RestTemplate();
-//
-//        try {
-//            ResponseEntity<Map> response =
-//                    restTemplate.postForEntity(realmUrl, request, Map.class);
-//
-//            return response.getBody();
-//        } catch (Exception e) {
-//            throw new KeycloakOperationException("TOKEN_GENERATION_FAILED", 1015,
-//                    "We could not process your login request at the moment.");
-//        }
-//    }
-
-// ============================================================================ HELPERS (domain + login URL)
-
-    // DB FORMAT: support.motivitylabs.net
+    /**
+     * Option A: extract first segment and append extension.
+     * Examples:
+     *   "support" -> "support.motivitylabs.net"
+     *   "support.motivitylabs.net" -> "support.motivitylabs.net"
+     *   "abc.xyz.com" -> "abc.motivitylabs.net"
+     */
     private String normalizeDomainForDB(String domain) {
         log.debug("Normalizing domain for DB. rawDomain={}", domain);
 
@@ -605,23 +520,19 @@ public class TenantService {
         if (d.startsWith("http://")) d = d.substring(7);
         if (d.startsWith("https://")) d = d.substring(8);
 
-        if (d.contains(extension)) {
-            log.debug("Domain already contains "+extension+". normalizedDomain={}", d);
+        // if domain already contains the extension, return as-is
+        if (d.contains(extension.replaceFirst("^\\.", "")) || d.endsWith(extension)) {
+            log.debug("Domain already contains extension. normalizedDomain={}", d);
             return d;
         }
 
-        if (!d.contains(".")) {
-            String normalized = d + extension;
-            log.debug("Domain has no dot, appending default suffix. normalizedDomain={}", normalized);
-            return normalized;
-        }
-
-        String normalized = d.split("\\.") + extension;
-        log.debug("Domain normalized to subdomain"+extension+". normalizedDomain={}", normalized);
+        // take first segment before any dot and append extension
+        String first = d.contains(".") ? d.split("\\.")[0] : d;
+        String normalized = first + extension;
+        log.debug("Domain normalized to {}", normalized);
         return normalized;
     }
 
-    // CLIENT FORMAT: https://support.motivitylabs.net/*
     private String normalizeDomainForRedirect(String domain) {
         String redirect = "https://" + normalizeDomainForDB(domain) + "/*";
         log.debug("Normalized domain for redirect. rawDomain={}, redirectUri={}", domain, redirect);
@@ -656,7 +567,7 @@ public class TenantService {
         return resp;
     }
 
-// ============================================================================ CRUD / LISTS
+    // ============================================================================ CRUD / LISTS
 
     @Transactional
     public TenantResponse updateTenant(String id, CreateTenantRequest req) {
@@ -695,7 +606,7 @@ public class TenantService {
 
         try {
             log.info("Attempting to delete Keycloak realm. realmName={}", t.getRealmName());
-            keycloak.realm(t.getRealmName()).remove();
+            kcUtil.deleteRealm(t.getRealmName());
             log.info("Keycloak realm deleted successfully. realmName={}", t.getRealmName());
         } catch (Exception e) {
             log.warn("Failed to delete Keycloak realm, continuing with local delete. realmName={}, error={}",
@@ -749,5 +660,4 @@ public class TenantService {
         log.debug("Returning {} billing types.", billingTypes.size());
         return billingTypes;
     }
-
 }
