@@ -15,7 +15,7 @@ public class User {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
-    private String userID;
+    private String pkUserId;
 
     private String firstName;
     private String lastName;
@@ -36,7 +36,7 @@ public class User {
     private boolean defaultUser;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "tenant_id")
+    @JoinColumn(name = "fk_tenant_id")
     @JsonIgnore
     private Tenant tenant;
 }

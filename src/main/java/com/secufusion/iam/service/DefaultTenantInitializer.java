@@ -38,6 +38,7 @@ public class DefaultTenantInitializer {
             req.setPhoneNo("+91-0000000000");
             req.setBillingCycleType("Yearly");
 
+            req.setAdminPhoneNumber("+91-1111111111");
             req.setAdminFirstName("Software");
             req.setAdminLastName("Admin");
             req.setAdminUserName("softwareadmin");
