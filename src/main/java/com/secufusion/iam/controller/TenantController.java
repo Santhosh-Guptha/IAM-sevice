@@ -4,7 +4,6 @@ import com.secufusion.iam.dto.CreateTenantRequest;
 import com.secufusion.iam.dto.TenantResponse;
 import com.secufusion.iam.entity.Tenant;
 import com.secufusion.iam.entity.TenantType;
-import com.secufusion.iam.service.TenantResumableService;
 import com.secufusion.iam.service.TenantService;
 import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
@@ -24,15 +23,11 @@ public class TenantController {
     @Autowired
     private TenantService tenantService;
 
-    @Autowired
-    private TenantResumableService tenantResumableService;
-
 
     @PostMapping
     public ResponseEntity<TenantResponse> createTenant(@Valid @RequestBody CreateTenantRequest req) {
         log.info("Request to create tenant realm={}", req.getTenantName());
-//        TenantResponse resp = tenantService.createTenant(req);
-        TenantResponse resp = tenantResumableService.createTenant(req);
+        TenantResponse resp = tenantService.createTenant(req);
         return ResponseEntity.ok(resp);
     }
 

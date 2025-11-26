@@ -32,8 +32,6 @@ public class AuthConfigService {
         AuthProviderConfig cfg = authProviderConfigRepository.findByTenant(tenant)
                 .orElseThrow(() -> new ResourceNotFoundException("Auth provider config missing"));
 
-        String realm = tenant.getRealmName();
-
         return new AuthDetailsDto(
                 tenant.getTenantID(),
                 tenant.getTenantName(),
@@ -43,6 +41,8 @@ public class AuthConfigService {
                 tenant.getRealmName(),
                 cfg.getClientId(),
                 cfg.getIssuerUri(),
+                cfg.getJwkUri(),
+                cfg.getTokenEndpoint(),
                 tenant.getDomain(),
                 tenant.getStatus()
         );

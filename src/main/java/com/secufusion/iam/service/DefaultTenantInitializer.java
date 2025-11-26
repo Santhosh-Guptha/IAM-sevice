@@ -13,7 +13,7 @@ import org.springframework.stereotype.Component;
 public class DefaultTenantInitializer {
 
     private final TenantRepository tenantRepository;
-    private final TenantResumableService tenantResumableService;
+    private final TenantService tenantService;
 
     @PostConstruct
     public void initDefaultTenant() {
@@ -44,7 +44,7 @@ public class DefaultTenantInitializer {
             req.setAdminEmail("no-reply@motivitylabs.net");
             req.setAdminPassword("Admin@123");
 
-            tenantResumableService.createTenant(req);
+            tenantService.createTenant(req);
 
             log.info(">>> Default tenant '{}' successfully initialized and ACTIVE.", defaultTenant);
 

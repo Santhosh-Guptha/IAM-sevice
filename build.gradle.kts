@@ -21,6 +21,7 @@ dependencies {
     implementation("org.keycloak:keycloak-admin-client:26.0.5")
     implementation("org.springframework.boot:spring-boot-starter-security")
     implementation("org.springframework.boot:spring-boot-starter-oauth2-resource-server")
+    implementation("org.springframework.boot:spring-boot-starter-actuator")
 
     // Lombok
     compileOnly("org.projectlombok:lombok")

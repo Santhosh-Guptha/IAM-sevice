@@ -29,14 +29,14 @@ public class UserController {
         return ResponseEntity.ok(response);
     }
 
-
-    @GetMapping("/auth/token")
-    public ResponseEntity<?> getAccessToken(@RequestParam String code){
-
-        Map<String, Object> tokenResponse = tenantService.getAccessToken(code);
-        return ResponseEntity.ok(tokenResponse);
-
-    }
+//
+//    @GetMapping("/auth/token")
+//    public ResponseEntity<?> getAccessToken(@RequestParam String code){
+//
+//        Map<String, Object> tokenResponse = tenantService.getAccessToken(code);
+//        return ResponseEntity.ok(tokenResponse);
+//
+//    }
 
 }
 
