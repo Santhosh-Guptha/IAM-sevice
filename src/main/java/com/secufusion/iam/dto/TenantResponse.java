@@ -1,5 +1,6 @@
 package com.secufusion.iam.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.secufusion.iam.entity.Address;
 import lombok.Data;
 
@@ -15,8 +16,11 @@ public class TenantResponse {
     private String phoneNo;
     private String tenantType;
     private String industry;
+    @JsonIgnore
     private Address temporaryAddress;
+    @JsonIgnore
     private Address permanentAddress;
+    @JsonIgnore
     private Address billingAddress;
     private String status;
     private Instant createdAt;
