@@ -2,10 +2,7 @@ package com.secufusion.iam.service;
 
 import com.secufusion.iam.dto.CreateTenantRequest;
 import com.secufusion.iam.dto.TenantResponse;
-import com.secufusion.iam.entity.AuthProviderConfig;
-import com.secufusion.iam.entity.Tenant;
-import com.secufusion.iam.entity.TenantType;
-import com.secufusion.iam.entity.User;
+import com.secufusion.iam.entity.*;
 import com.secufusion.iam.exception.KeycloakOperationException;
 import com.secufusion.iam.exception.ResourceNotFoundException;
 import com.secufusion.iam.repository.AuthProviderConfigRepository;
@@ -32,7 +29,6 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
-import java.time.Clock;
 import java.time.Instant;
 import java.util.*;
 
@@ -64,6 +60,12 @@ public class TenantService {
 
     @Autowired
     private KeycloakAdminUtil kcUtil;
+
+    @Autowired
+    private GroupService groupService;
+
+    @Autowired
+    private RoleService roleService;
 
     @Value("${keycloak.admin.server-url}")
     private String baseUrl;
@@ -145,6 +147,33 @@ public class TenantService {
         savedTenant.setStatus("CREATED_LOCAL");
         tenantRepository.save(savedTenant);
         log.info("Updated tenant status to CREATED_LOCAL. tenantId={}", savedTenant.getTenantID());
+
+        final String tenantId = savedTenant.getTenantID();
+        final String adminUserId = savedUser.getPkUserId();
+
+        log.info("[AUTO-CONFIG] Creating default Admin role + Admin group for tenantId={}", tenantId);
+
+        Roles adminRole = roleService.createOrGetDefaultRole(
+                tenantId,
+                savedTenant.getTenantName() + "_Admin",
+                "Administrator role",
+                adminUserId
+        );
+        log.info("[AUTO-CONFIG] Admin Role created id={}", adminRole.getPkRoleId());
+
+        Groups adminGroup = groupService.createOrGetDefaultGroup(
+                tenantId,
+                savedTenant.getTenantName() + "_Admin",
+                true,
+                adminUserId
+        );
+        log.info("[AUTO-CONFIG] Admin Group created id={}", adminGroup.getPkGroupId());
+
+        groupService.assignRoleToGroup(adminGroup, adminRole);
+        log.info("[AUTO-CONFIG] Role mapped to group");
+
+        groupService.assignUserToGroup(adminGroup, savedUser);
+        log.info("[AUTO-CONFIG] Admin user assigned to Admin group");
 
         // Register rollback compensation: if DB rolls back, delete realm if created
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {

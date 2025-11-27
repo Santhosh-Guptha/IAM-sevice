@@ -17,5 +17,6 @@ public interface GroupsRepository extends JpaRepository<Groups, Serializable> {
             Character isDefault
     );
 
+    Optional<Groups> existsByName(String name);
 }
 

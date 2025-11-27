@@ -1,5 +1,7 @@
 package com.secufusion.iam.service;
 
+import com.secufusion.iam.dto.GroupsDropdown;
+import com.secufusion.iam.dto.RoleDropdownResponse;
 import com.secufusion.iam.entity.Groups;
 import com.secufusion.iam.entity.Roles;
 import com.secufusion.iam.entity.Tenant;
@@ -31,7 +33,7 @@ public class GroupService {
 
     /** Create or get a group */
     @Transactional
-    public Groups createOrGetGroup(String tenantId, String groupName, boolean isAdmin, String defaultUser) {
+    public Groups createOrGetDefaultGroup(String tenantId, String groupName, boolean isAdmin, String defaultUser) {
         log.info("Checking group '{}' for tenantId={}", groupName, tenantId);
 
         Tenant tenant = tenantRepository.findById(tenantId)
@@ -98,5 +100,43 @@ public class GroupService {
         groupsRepository.save(group);
 
         log.info("Assigned user '{}' to group '{}'", user.getUserName(), group.getName());
+    }
+
+    public Groups createGroup(Groups groups) {
+        groupsRepository.existsByName(groups.getName())
+                .ifPresent(existingGroup -> {
+                    throw new ResourceNotFoundException("Group with name '" + groups.getName() + "' already exists.");
+                });
+        groups.setActive(true);
+        groups.setCreatedTime(LocalDateTime.now());
+        groups.setIsDefault('N');
+        groups.setIsAdmin('N');
+        return groupsRepository.save(groups);
+    }
+
+    public Groups getGroupById(String id) {
+        return groupsRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Group not found with id: " + id));
+    }
+
+    public List<Groups> getAllGroups() {
+        return groupsRepository.findAll();
+    }
+
+    public List<GroupsDropdown> getGroupsForDropdown() {
+        List<Groups> groupsList = groupsRepository.findAll();
+        return groupsList.stream()
+                .filter(g -> !((g.getIsAdmin() != null && g.getIsAdmin() == 'Y')
+                             || (g.getIsDefault() != null && g.getIsDefault() == 'Y')))
+                .map(group -> {
+                    Set<RoleDropdownResponse> roles = Optional.ofNullable(group.getMappedRoles())
+                            .orElse(Collections.emptySet())
+                            .stream()
+                            .map(r -> new RoleDropdownResponse(r.getPkRoleId(), r.getName()))
+                            .collect(java.util.stream.Collectors.toSet());
+
+                    return new GroupsDropdown(group.getPkGroupId(), group.getName(), roles);
+                })
+                .toList();
     }
 }
