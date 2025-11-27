@@ -148,6 +148,8 @@ public class UserService {
             user.setEmail(dto.getEmail());
             user.setUserName(dto.getUserName());
             user.setPhoneNo(dto.getPhoneNumber());
+            //validate the groups and assign them
+            user.setMappedGroups(dto.getGroups());
             userRepository.save(user);
 
             log.info("✔ Local DB user updated. userId={}", userId);

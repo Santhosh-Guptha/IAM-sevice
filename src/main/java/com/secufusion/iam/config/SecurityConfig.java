@@ -28,7 +28,7 @@ public class SecurityConfig {
 //                        .requestMatchers("/api/**").permitAll()
                                 .requestMatchers("/tenant-config/**").permitAll()
                                 .requestMatchers("/actuator/health", "/actuator/info").permitAll()
-                                .anyRequest().authenticated()
+                                .anyRequest().permitAll()
                 )
                 .exceptionHandling(ex->ex.authenticationEntryPoint(customJwtEntryPoint()))
                 .oauth2ResourceServer(oauth2 -> oauth2

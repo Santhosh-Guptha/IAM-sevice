@@ -83,8 +83,8 @@ public class DefaultTenantInitializer {
             // -----------------------------------------------------------
             log.info("[2] Ensuring default roles for tenantId={} ...", tenantId);
 
-            Roles adminRole = roleService.createOrGetRole(
-                    tenantId, "Admin", "Administrator role", tenantUser.get().getPkUserId());
+            Roles adminRole = roleService.createOrGetDefaultRole(
+                    tenantId, defaultTenantName + "_Admin", "Administrator role", tenantUser.get().getPkUserId());
 
             log.info("[2] Default roles verified (Admin)");
 
@@ -102,7 +102,7 @@ public class DefaultTenantInitializer {
             if (adminGroup == null) {
                 log.warn("[3] No default admin group found → Creating '{}'", expectedGroupName);
 
-                adminGroup = groupService.createOrGetGroup(
+                adminGroup = groupService.createOrGetDefaultGroup(
                         tenantId, expectedGroupName, true, tenantUser.get().getPkUserId());
 
                 adminGroup.setIsDefault('Y');
