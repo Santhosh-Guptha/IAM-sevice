@@ -32,12 +32,13 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.*;
 
 /**
  * Refactored TenantService that delegates all Keycloak interactions to KeycloakAdminUtil.
- *
+ * <p>
  * Behavior preserved from previous implementation:
  * - resumable provisioning flow
  * - domain normalization (Option A: extract first segment and append extension)
@@ -213,6 +214,8 @@ public class TenantService {
         tenant.setPermanentAddress(req.getPermanentAddress());
         tenant.setBillingAddress(req.getBillingAddress());
         tenant.setBillingCycleType(req.getBillingCycleType());
+        tenant.setCreatedAt(Instant.now());
+        tenant.setEmail(req.getEmail());
         return tenant;
     }
 
@@ -503,9 +506,9 @@ public class TenantService {
     /**
      * Option A: extract first segment and append extension.
      * Examples:
-     *   "support" -> "support.motivitylabs.net"
-     *   "support.motivitylabs.net" -> "support.motivitylabs.net"
-     *   "abc.xyz.com" -> "abc.motivitylabs.net"
+     * "support" -> "support.motivitylabs.net"
+     * "support.motivitylabs.net" -> "support.motivitylabs.net"
+     * "abc.xyz.com" -> "abc.motivitylabs.net"
      */
     private String normalizeDomainForDB(String domain) {
         log.debug("Normalizing domain for DB. rawDomain={}", domain);
@@ -659,5 +662,50 @@ public class TenantService {
         );
         log.debug("Returning {} billing types.", billingTypes.size());
         return billingTypes;
+    }
+
+    public String checkTenantNameAvailability(String tenantName) {
+        boolean exists = tenantRepository.existsByTenantName(tenantName);
+
+        if (exists) {
+            return "Tenant name already exists.";
+        } else {
+            return "Tenant name is available.";
+        }
+    }
+
+
+    public String checkExistsByDomain(String domain) {
+
+        String domainName = normalizeDomainForDB(domain);
+        boolean exist = tenantRepository.existsByDomain(domainName);
+
+        if (exist) {
+            return "Domain Name already exists.";
+        } else {
+            return "Domain name is available.";
+        }
+    }
+
+    public String checkPhoneNumber(String phoneNumber) {
+
+        boolean exist = tenantRepository.existsByPhoneNo(phoneNumber);
+
+        if (exist) {
+            return "Phone Number already exists.";
+        } else {
+            return "Phone Number is available.";
+        }
+    }
+
+    public String checkEmail(String email) {
+
+        boolean exist = tenantRepository.existsByEmail(email);
+
+        if (exist) {
+            return "Email already exists.";
+        } else {
+            return "Email is available.";
+        }
     }
 }

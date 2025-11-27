@@ -120,4 +120,28 @@ public class UserController {
         return ResponseEntity.ok(resp);
     }
 
+    @GetMapping("/check")
+    public ResponseEntity<String> uniqueValidations(@RequestParam(required = false) String userName,
+                                                    @RequestParam(required=false)String phoneNumber,
+                                                    @RequestParam (required = false )String email) {
+        if(userName != null){
+            String result = userService.checkUserName(userName);
+            if(result != null){
+                return ResponseEntity.ok(result);
+            }
+        }
+        if(phoneNumber != null){
+            String result = userService.checkMobileNumber(phoneNumber);
+            if(result != null){
+                return ResponseEntity.ok(result);
+            }
+        }
+        if(email != null){
+            String result = userService.checkEmail(email);
+            if(result != null){
+                return ResponseEntity.ok(result);
+            }
+        }
+        return ResponseEntity.badRequest().body("");
+    }
 }
