@@ -21,4 +21,12 @@ public interface UserRepository extends JpaRepository<User, Serializable> {
     Optional<User> findByPhoneNoAndTenant_TenantID(String phoneNumber, String tenantId);
 
     Optional<User> findByEmailAndTenant_TenantID(String email, String tenantId);
+
+    Optional<User> findByTenant_TenantIDAndDefaultUser(String tenantId, boolean defaultUser);
+
+    boolean existsByUserName(String userName);
+
+    boolean existsByEmail(String email);
+
+    boolean existsByPhoneNo(String mobileNumber);
 }

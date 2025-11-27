@@ -17,4 +17,14 @@ public interface TenantRepository extends JpaRepository<Tenant, Serializable> {
     Optional<Tenant> findByTenantName(String tenantName);
 
     Optional<Tenant> findByDomain(String host);
+
+    boolean existsByTenantName(String tenantName);
+
+    boolean existsByDomain(String domainName);
+
+    boolean existsByPhoneNo(String domainName);
+
+    boolean existsByEmail(String email);
+
+
 }

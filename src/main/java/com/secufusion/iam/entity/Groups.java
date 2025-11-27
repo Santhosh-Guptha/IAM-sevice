@@ -5,6 +5,8 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.Set;
 
 @Entity
@@ -23,9 +25,21 @@ public class Groups {
 
     private String description;
 
+    private String name;
+
+    private Boolean active;
+
+    private String createdBy;
+
+    private String updatedBy;
+
+    private LocalDateTime createdTime;
+
+    private LocalDateTime updatedTime;
+
     /** Each group belongs to one tenant */
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "tenant_id", nullable = false)
+    @JoinColumn(name = "fk_tenant_id", nullable = false)
     private Tenant tenant;
 
     /** Group ↔ Users = M:N */
@@ -35,14 +49,14 @@ public class Groups {
             joinColumns = @JoinColumn(name = "fk_group_id"),
             inverseJoinColumns = @JoinColumn(name = "fk_user_id")
     )
-    private Set<User> mappedUsers;
+    private Set<User> mappedUsers = new HashSet<>();
 
     /** Group ↔ Roles = M:N */
-    @ManyToMany(fetch = FetchType.LAZY)
+    @ManyToMany(fetch = FetchType.EAGER)
     @JoinTable(
             name = "group_role_map",
             joinColumns = @JoinColumn(name = "fk_group_id"),
             inverseJoinColumns = @JoinColumn(name = "fk_role_id")
     )
-    private Set<Roles> mappedRoles;
+    private Set<Roles> mappedRoles = new HashSet<>();
 }

@@ -87,6 +87,8 @@ public class UserService {
                     List.of("UPDATE_PASSWORD", "VERIFY_EMAIL")
             );
 
+            kcUtil.sendWelcomeEmail(savedUser.getEmail(), tenant.getAuthProviderConfig().getLoginUrl(), savedUser.getUserName());
+
             log.info("✔ Required action email triggered for kcUserId={}", kcUserId);
 
             // Assign realm-admin role (or default roles)
@@ -371,5 +373,32 @@ public class UserService {
         dto.setEmail(user.getEmail());
         dto.setPhoneNumber(user.getPhoneNo());
         return dto;
+    }
+
+    public String checkMobileNumber(String mobileNumber){
+        boolean check =userRepository.existsByPhoneNo(mobileNumber);
+
+        if (check){
+            return "Mobile Number already exists.";
+        } else{
+            return "Mobile Number is available.";
+        }
+    }
+    public String checkEmail(String email){
+        boolean check =userRepository.existsByEmail(email);
+        if (check){
+            return "Email already exists.";
+        } else{
+            return "Email is available.";
+        }
+    }
+
+    public String checkUserName(String userName) {
+        boolean check = userRepository.existsByUserName(userName);
+        if(check){
+            return "Username already exists.";
+        }else {
+            return "Username is available.";
+        }
     }
 }

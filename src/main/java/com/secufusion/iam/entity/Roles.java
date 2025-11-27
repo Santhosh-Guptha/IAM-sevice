@@ -5,6 +5,8 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDateTime;
+
 @Entity
 @Table(name = "roles")
 @Data
@@ -25,8 +27,18 @@ public class Roles {
 
     private Character isSuperRole = 'N';
 
+    private Boolean active;
+
+    private String createdBy;
+
+    private String updatedBy;
+
+    private LocalDateTime createdTime;
+
+    private LocalDateTime updatedTime;
+
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "tenant_id", nullable = false)
+    @JoinColumn(name = "fk_tenant_id", nullable = false)
     private Tenant tenant;
 
     /** Role ↔ Scope mapping added later */
