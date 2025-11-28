@@ -1,6 +1,7 @@
 package com.secufusion.iam.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.secufusion.iam.service.AuthConfigService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Bean;
@@ -21,57 +22,53 @@ import java.util.*;
 public class SecurityConfig {
 
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain securityFilterChain(HttpSecurity http, DbJwtAuthenticationManagerResolver resolver) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
-                .authorizeHttpRequests(authz -> authz
-//                        .requestMatchers("/api/**").permitAll()
-                                .requestMatchers("/tenant-config/**").permitAll()
-                                .requestMatchers("/actuator/health", "/actuator/info").permitAll()
-                                .anyRequest().permitAll()
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers("/api/public/**").permitAll()
+                        .requestMatchers("/tenant-config/**").permitAll()
+                        .anyRequest().permitAll()
                 )
-                .exceptionHandling(ex->ex.authenticationEntryPoint(customJwtEntryPoint()))
                 .oauth2ResourceServer(oauth2 -> oauth2
-                        .jwt(jwt -> jwt
-                                .jwtAuthenticationConverter(jwtAuthenticationConverter())
-                        )
+                        .authenticationManagerResolver(resolver)  // Inject the resolver bean
                 );
-
         return http.build();
     }
-    @Bean
-    public AuthenticationEntryPoint customJwtEntryPoint() {
-        return new AuthenticationEntryPoint() {
-            @Override
-            public void commence(HttpServletRequest request, HttpServletResponse response,
-                                 AuthenticationException authException) throws IOException {
 
-                Throwable cause = authException.getCause();
-                String message = "Invalid token";
-
-                if (cause instanceof JwtValidationException jwtEx) {
-                    if (jwtEx.getErrors().stream().anyMatch(e -> e.getDescription().contains("expired"))) {
-                        message = "TOKEN_EXPIRED";
-                    }
-                }
-
-                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-                response.setContentType("application/json");
-                new ObjectMapper().writeValue(response.getWriter(),
-                        Map.of("error", message, "status", 401));
-            }
-        };
-    }
-
-    @Bean
-    public JwtAuthenticationConverter jwtAuthenticationConverter() {
-        JwtGrantedAuthoritiesConverter realmConverter = new JwtGrantedAuthoritiesConverter();
-        realmConverter.setAuthoritiesClaimName("realm_access.roles");
-        realmConverter.setAuthorityPrefix("ROLE_");
-
-        JwtAuthenticationConverter authenticationConverter = new JwtAuthenticationConverter();
-        authenticationConverter.setJwtGrantedAuthoritiesConverter(realmConverter);
-
-        return authenticationConverter;
-    }
+//    @Bean
+//    public AuthenticationEntryPoint customJwtEntryPoint() {
+//        return new AuthenticationEntryPoint() {
+//            @Override
+//            public void commence(HttpServletRequest request, HttpServletResponse response,
+//                                 AuthenticationException authException) throws IOException {
+//
+//                Throwable cause = authException.getCause();
+//                String message = "Invalid token";
+//
+//                if (cause instanceof JwtValidationException jwtEx) {
+//                    if (jwtEx.getErrors().stream().anyMatch(e -> e.getDescription().contains("expired"))) {
+//                        message = "TOKEN_EXPIRED";
+//                    }
+//                }
+//
+//                response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+//                response.setContentType("application/json");
+//                new ObjectMapper().writeValue(response.getWriter(),
+//                        Map.of("error", message, "status", 401));
+//            }
+//        };
+//    }
+//
+//    @Bean
+//    public JwtAuthenticationConverter jwtAuthenticationConverter() {
+//        JwtGrantedAuthoritiesConverter realmConverter = new JwtGrantedAuthoritiesConverter();
+//        realmConverter.setAuthoritiesClaimName("realm_access.roles");
+//        realmConverter.setAuthorityPrefix("ROLE_");
+//
+//        JwtAuthenticationConverter authenticationConverter = new JwtAuthenticationConverter();
+//        authenticationConverter.setJwtGrantedAuthoritiesConverter(realmConverter);
+//
+//        return authenticationConverter;
+//    }
 }
