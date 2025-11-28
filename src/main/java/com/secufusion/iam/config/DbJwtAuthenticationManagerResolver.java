@@ -24,6 +24,7 @@ public class DbJwtAuthenticationManagerResolver implements AuthenticationManager
         this.tenantService = tenantService;
     }
 
+
     @Override
     public AuthenticationManager resolve(HttpServletRequest request) {
         String authHeader = request.getHeader("Authorization");
