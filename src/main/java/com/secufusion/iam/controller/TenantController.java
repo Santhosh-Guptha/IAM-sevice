@@ -61,4 +61,34 @@ public class TenantController {
     public ResponseEntity<List<Map<String, Object>>> getBillingTypes(){
         return ResponseEntity.ok(tenantService.getTenantBillingTypes());
     }
+
+    @GetMapping("/check")
+    public ResponseEntity<String> checkTenant(
+            @RequestParam(required = false) String tenantName,
+            @RequestParam(required = false) String domainName,
+            @RequestParam(required = false) String phoneNumber,
+            @RequestParam(required = false) String tenantEmail) {
+
+        if (tenantName != null) {
+            String result = tenantService.checkTenantNameAvailability(tenantName);
+            return ResponseEntity.ok(result);
+        }
+
+        if (domainName != null) {
+            String result = tenantService.checkExistsByDomain(domainName);
+            return ResponseEntity.ok(result);
+        }
+
+        if (phoneNumber != null) {
+            String result = tenantService.checkPhoneNumber(phoneNumber);
+            return ResponseEntity.ok(result);
+        }
+
+        if (tenantEmail != null) {
+            String result = tenantService.checkEmail(tenantEmail);
+            return ResponseEntity.ok(result);
+        }
+
+        return ResponseEntity.badRequest().body("");
+    }
 }

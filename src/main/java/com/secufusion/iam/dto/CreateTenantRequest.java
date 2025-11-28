@@ -10,6 +10,7 @@ public class CreateTenantRequest {
 //    @NotBlank
 //    private String realmName;
 
+    private String email;
     private String domain;
     private String region;
     private String phoneNo;
@@ -28,8 +29,7 @@ public class CreateTenantRequest {
     private String adminFirstName;
     private String adminLastName;
     private String adminUserName;
-
+    private String adminPhoneNumber;
     private String adminEmail;
-
     private String adminPassword;
 }

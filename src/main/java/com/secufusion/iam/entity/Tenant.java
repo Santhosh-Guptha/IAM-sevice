@@ -5,9 +5,13 @@ import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Set;
 
 @Entity
 @Table(name = "Tenant")
@@ -45,7 +49,18 @@ public class Tenant {
 
     private String status;
     private String realmName;
+
+    @CreationTimestamp
     private Instant createdAt = Instant.now();
+
+    @UpdateTimestamp
+    private LocalDateTime updatedAt;
+
+    private String createdBy;
+
+    private String updatedBy;
+
+    private String parentTenantId;
 
     @OneToOne(mappedBy = "tenant", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     @JsonManagedReference
