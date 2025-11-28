@@ -5,10 +5,7 @@ import com.secufusion.iam.dto.TenantResponse;
 import com.secufusion.iam.entity.*;
 import com.secufusion.iam.exception.KeycloakOperationException;
 import com.secufusion.iam.exception.ResourceNotFoundException;
-import com.secufusion.iam.repository.AuthProviderConfigRepository;
-import com.secufusion.iam.repository.TenantRepository;
-import com.secufusion.iam.repository.TenantTypeRepository;
-import com.secufusion.iam.repository.UserRepository;
+import com.secufusion.iam.repository.*;
 import com.secufusion.iam.util.KeycloakAdminUtil;
 
 import jakarta.ws.rs.WebApplicationException;
@@ -66,6 +63,19 @@ public class TenantService {
 
     @Autowired
     private RoleService roleService;
+
+    @Autowired
+    private RegionRepository regionRepository;
+
+    @Autowired
+    private CountryRepository countryRepository;
+
+    @Autowired
+    private StatesRepository stateRepository;
+
+    @Autowired
+    private CityRepository cityRepository;
+
 
     @Value("${keycloak.admin.server-url}")
     private String baseUrl;
@@ -140,6 +150,7 @@ public class TenantService {
         User admin = buildAdminSkeleton(req, savedTenant);
         admin.setStatus("CREATING");
         User savedUser = userRepository.save(admin);
+        req.setAdminUserName(savedUser.getUserName());
         log.info("Created admin user skeleton in DB. userId={}, username={}, status={}",
                 savedUser.getPkUserId(), savedUser.getUserName(), savedUser.getStatus());
 
@@ -197,34 +208,106 @@ public class TenantService {
         log.debug("Validating input for new tenant. tenantName={}, adminUserName={}, adminEmail={}, domain={}",
                 req.getTenantName(), req.getAdminUserName(), req.getAdminEmail(), req.getDomain());
 
-        if (tenantRepository.findByTenantName(req.getTenantName()).isPresent()) {
-            log.warn("Validation failed: tenant name already exists. tenantName={}", req.getTenantName());
-            throw new KeycloakOperationException("TENANT_ALREADY_EXISTS", 1001, "Tenant name already exists.");
-        }
+        // tenant name - required then existence
+                if (req.getTenantName() == null || req.getTenantName().trim().isEmpty()) {
+                    log.warn("Validation failed: tenant name is required.");
+                    throw new KeycloakOperationException("ORGANIZATION_NAME_REQUIRED", 1000, "Organization name is required.");
+                }
+                log.debug("Checking tenant name availability. tenantName={}", req.getTenantName());
+                if (tenantRepository.existsByTenantName(req.getTenantName())) {
+                    log.warn("Validation failed: tenant name already exists. tenantName={}", req.getTenantName());
+                    throw new KeycloakOperationException("ORGANIZATION_NAME_ALREADY_EXISTS", 1001, "Organization name already exists.");
+                }
 
-        String dbDomain = normalizeDomainForDB(req.getDomain());
-        boolean domainExists = tenantRepository.findAll().stream()
-                .anyMatch(t -> dbDomain.equalsIgnoreCase(t.getDomain()));
-        if (domainExists) {
-            log.warn("Validation failed: domain already exists. normalizedDomain={}", dbDomain);
-            throw new KeycloakOperationException("DOMAIN_ALREADY_EXISTS", 1002, "This domain is already registered.");
-        }
+                // domain - required then normalize & existence
+                if (req.getDomain() == null || req.getDomain().trim().isEmpty()) {
+                    log.warn("Validation failed: domain is required.");
+                    throw new KeycloakOperationException("INVALID_DOMAIN", 1007, "A valid domain must be provided.");
+                }
+                String dbDomain = normalizeDomainForDB(req.getDomain());
+                log.debug("Checking domain availability. normalizedDomain={}", dbDomain);
+                if (tenantRepository.existsByDomain(dbDomain)) {
+                    log.warn("Validation failed: domain already exists. normalizedDomain={}", dbDomain);
+                    throw new KeycloakOperationException("DOMAIN_ALREADY_EXISTS", 1002, "This domain is already registered.");
+                }
 
-        if (userRepository.findByUserName(req.getAdminUserName()).isPresent()) {
-            log.warn("Validation failed: username already taken. username={}", req.getAdminUserName());
-            throw new KeycloakOperationException("USERNAME_ALREADY_EXISTS", 1003, "Username already taken.");
-        }
+                // organization phone - required then existence
+                if (req.getPhoneNo() == null || req.getPhoneNo().trim().isEmpty()) {
+                    log.warn("Validation failed: organization phone number is required.");
+                    throw new KeycloakOperationException("ORGANIZATION_PHONE_NUMBER_REQUIRED", 1008, "Organization phone number is required.");
+                }
+                log.debug("Checking organization phone availability. phoneNo={}", req.getPhoneNo());
+                if (tenantRepository.existsByPhoneNo(req.getPhoneNo())) {
+                    log.warn("Validation failed: organization phone number already exists. phoneNo={}", req.getPhoneNo());
+                    throw new KeycloakOperationException("ORGANIZATION_PHONE_NUMBER_ALREADY_EXISTS", 1009, "Organization Phone number already exists.");
+                }
 
-        if (userRepository.findByEmail(req.getAdminEmail()).isPresent()) {
-            log.warn("Validation failed: email already exists. email={}", req.getAdminEmail());
-            throw new KeycloakOperationException("EMAIL_ALREADY_EXISTS", 1004, "Email already exists.");
-        }
+                // organization email - required then existence
+                if (req.getEmail() == null || req.getEmail().trim().isEmpty()) {
+                    log.warn("Validation failed: organization email is required.");
+                    throw new KeycloakOperationException("ORGANIZATION_EMAIL_REQUIRED", 1011, "Organization email is required.");
+                }
+                log.debug("Checking organization email availability. email={}", req.getEmail());
+                if (tenantRepository.existsByEmail(req.getEmail())) {
+                    log.warn("Validation failed: email already exists in tenant table. email={}", req.getEmail());
+                    throw new KeycloakOperationException("ORGANIZATION_EMAIL_ALREADY_EXISTS", 1012, "Organization email already exists.");
+                }
 
-        boolean realmExists = kcUtil.realmExists(req.getTenantName());
-        if (realmExists) {
-            log.warn("Validation failed: realm already exists in Keycloak. realm={}", req.getTenantName());
-            throw new KeycloakOperationException("REALM_ALREADY_EXISTS", 1005, "Realm already exists.");
-        }
+                // admin username - (kept commented as before)
+        //        if (req.getAdminUserName() == null || req.getAdminUserName().trim().isEmpty()) {
+        //            log.warn("Validation failed: admin username is required.");
+        //            throw new KeycloakOperationException("ADMIN_USERNAME_REQUIRED", 1006, "Admin username is required.");
+        //        }
+        //        if (userRepository.findByUserName(req.getAdminUserName()).isPresent()) {
+        //            log.warn("Validation failed: username already taken. username={}", req.getAdminUserName());
+        //            throw new KeycloakOperationException("ADMIN_USERNAME_ALREADY_EXISTS", 1003, "Admin Username already taken.");
+        //        }
+
+                // admin email - required then existence
+                if (req.getAdminEmail() == null || req.getAdminEmail().trim().isEmpty()) {
+                    log.warn("Validation failed: admin email is required.");
+                    throw new KeycloakOperationException("ADMIN_EMAIL_REQUIRED", 1007, "Admin email is required.");
+                }
+                log.debug("Checking admin email availability. adminEmail={}", req.getAdminEmail());
+                if (userRepository.findByEmail(req.getAdminEmail()).isPresent()) {
+                    log.warn("Validation failed: email already exists. email={}", req.getAdminEmail());
+                    throw new KeycloakOperationException("ADMIN_EMAIL_ALREADY_EXISTS", 1004, "Admin Email already exists.");
+                }
+
+                // admin phone - required then existence
+                if (req.getAdminPhoneNumber() == null || req.getAdminPhoneNumber().trim().isEmpty()) {
+                    log.warn("Validation failed: admin phone number is required.");
+                    throw new KeycloakOperationException("ADMIN_PHONE_NUMBER_REQUIRED", 1017, "Admin phone number is required.");
+                }
+                log.debug("Checking admin phone availability. adminPhone={}", req.getAdminPhoneNumber());
+                if (userRepository.findByPhoneNo(req.getAdminPhoneNumber()).isPresent()) {
+                    log.warn("Validation failed: admin phone number already exists. phoneNo={}", req.getAdminPhoneNumber());
+                    throw new KeycloakOperationException("ADMIN_PHONE_NUMBER_ALREADY_EXISTS", 1016, "Admin Phone number already exists.");
+                }
+
+                // region/country/state/city validation (unchanged)
+                boolean b = regionRepository.existsRegionCountryStateCity(
+                        req.getRegion(),
+                        req.getPermanentAddress() != null ? req.getPermanentAddress().getCountry() : null,
+                        req.getPermanentAddress() != null ? req.getPermanentAddress().getState() : null,
+                        req.getPermanentAddress() != null ? req.getPermanentAddress().getCity() : null
+                );
+                if (!b) {
+                    log.warn("Validation failed: region/country/state/city combination is invalid. region={}, country={}, state={}, city={}",
+                            req.getRegion(),
+                            req.getPermanentAddress() != null ? req.getPermanentAddress().getCountry() : null,
+                            req.getPermanentAddress() != null ? req.getPermanentAddress().getState() : null,
+                            req.getPermanentAddress() != null ? req.getPermanentAddress().getCity() : null);
+        //            throw new KeycloakOperationException("INVALID_REGION_COUNTRY_STATE_CITY", 1021,
+        //                    "The combination of region, country, state, and city is invalid.");
+                }
+
+                // final: check Keycloak realm existence
+                boolean realmExists = kcUtil.realmExists(req.getTenantName());
+                if (realmExists) {
+                    log.warn("Validation failed: realm already exists in Keycloak. realm={}", req.getTenantName());
+                    throw new KeycloakOperationException("ORGANIZATION_REALM_ALREADY_EXISTS", 1005, "Organization Realm already exists.");
+                }
 
         log.debug("Validation for new tenant passed. tenantName={}", req.getTenantName());
     }
@@ -254,7 +337,12 @@ public class TenantService {
         User admin = new User();
         admin.setFirstName(req.getAdminFirstName());
         admin.setLastName(req.getAdminLastName());
-        String generatedUsername = generateUniqueUsername(req.getAdminFirstName(), req.getAdminLastName());
+        String generatedUsername;
+        if (req.getAdminUserName() != null && !req.getAdminUserName().trim().isEmpty()) {
+            generatedUsername = req.getAdminUserName().trim().toLowerCase();
+        } else {
+            generatedUsername = generateUniqueUsername(req.getAdminFirstName(), req.getAdminLastName());
+        }
         admin.setUserName(generatedUsername);
         admin.setEmail(req.getAdminEmail());
         admin.setPhoneNo(req.getAdminPhoneNumber());
@@ -470,7 +558,8 @@ public class TenantService {
                     req.getAdminUserName(),
                     req.getAdminEmail(),
                     req.getAdminFirstName(),
-                    req.getAdminLastName()
+                    req.getAdminLastName(),
+                    req.getAdminPassword() != null && !req.getAdminPassword().trim().isEmpty()
             );
 
             // kcUtil.createUser returns null on conflict in this util, but we already checked above.
@@ -479,9 +568,19 @@ public class TenantService {
                         "Unable to create tenant admin user (conflict).");
             }
 
-            // Trigger required actions: UPDATE_PASSWORD, VERIFY_EMAIL (no password set)
-            kcUtil.sendRequiredActionEmail(req.getTenantName(), createdUserId, List.of("UPDATE_PASSWORD", "VERIFY_EMAIL"));
-
+           // Trigger required actions: if admin password provided, set it and only VERIFY_EMAIL; otherwise require UPDATE_PASSWORD + VERIFY_EMAIL
+           String adminPassword = req.getAdminPassword();
+           if (adminPassword != null && !adminPassword.trim().isEmpty()) {
+               try {
+                   kcUtil.setPassword(req.getTenantName(), createdUserId, adminPassword, false);
+                   kcUtil.sendRequiredActionEmail(req.getTenantName(), createdUserId, List.of("VERIFY_EMAIL"));
+               } catch (Exception e) {
+                   log.error("Failed to set password or send verify email for user {}: {}", createdUserId, e.getMessage(), e);
+                   throw new KeycloakOperationException("USER_CONFIG_FAILED", 1010, "Unable to configure tenant admin user.");
+               }
+           } else {
+               kcUtil.sendRequiredActionEmail(req.getTenantName(), createdUserId, List.of("UPDATE_PASSWORD", "VERIFY_EMAIL"));
+           }
             // Assign realm-admin role
             kcUtil.assignRealmAdminRole(req.getTenantName(), createdUserId);
 

@@ -67,7 +67,8 @@ public class UserService {
                     dto.getUserName(),
                     dto.getEmail(),
                     dto.getFirstName(),
-                    dto.getLastName()
+                    dto.getLastName(),
+                    false
             );
 
             if (kcUserId == null) {

@@ -21,7 +21,7 @@ public class GlobalExceptionHandler {
     // ===============================
     @ExceptionHandler(KeycloakOperationException.class)
     public ResponseEntity<Map<String, Object>> handleKeycloakException(KeycloakOperationException ex) {
-        log.error("Business error [{} - {}]: {}", ex.getErrorCode(), ex.getErrorNumber(), ex.getMessage());
+        log.error("[{} - {}]: {}", ex.getErrorCode(), ex.getErrorNumber(), ex.getMessage());
 
         Map<String, Object> body = new HashMap<>();
         body.put("success", false);

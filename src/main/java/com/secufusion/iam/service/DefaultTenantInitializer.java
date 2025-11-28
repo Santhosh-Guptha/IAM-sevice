@@ -10,6 +10,7 @@ import com.secufusion.iam.repository.TenantRepository;
 import com.secufusion.iam.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.Optional;
@@ -26,6 +27,27 @@ public class DefaultTenantInitializer {
     private final GroupsRepository groupRepository;
     private final UserRepository userRepository;
 
+    @Value("${master.admin.email}")
+    private String masterAdminEmail;
+
+    @Value("${master.admin.username}")
+    private String masterAdminUsername;
+
+    @Value("${master.admin.firstname}")
+    private String masterAdminFirstName;
+
+    @Value("${master.admin.lastname}")
+    private String masterAdminLastName;
+
+    @Value("${master.admin.phone}")
+    private String masterAdminPhone;
+
+    @Value("${master.admin.domain}")
+    private String masterTenantDomain;
+
+    @Value("${master.admin.tenant-name}")
+    private String defaultTenantName;
+
     public void initialize() {
 
         log.info("==============================================================");
@@ -33,7 +55,6 @@ public class DefaultTenantInitializer {
         log.info("==============================================================");
 
         try {
-            final String defaultTenantName = "secufusion";
 
             // -----------------------------------------------------------
             // 1) FETCH OR CREATE TENANT
@@ -48,18 +69,18 @@ public class DefaultTenantInitializer {
 
                 CreateTenantRequest req = new CreateTenantRequest();
                 req.setTenantName(defaultTenantName);
-                req.setDomain("master.motivitylabs.net");
+                req.setDomain(masterTenantDomain);
                 req.setRegion("GLOBAL");
                 req.setTenantType("Master MSSP");
                 req.setIndustry("Technology");
-                req.setPhoneNo("+91-0000000000");
+                req.setPhoneNo(masterAdminPhone);
                 req.setBillingCycleType("Yearly");
 
-                req.setAdminPhoneNumber("+91-1111111111");
-                req.setAdminFirstName("Software");
-                req.setAdminLastName("Admin");
-                req.setAdminUserName("softwareadmin");
-                req.setAdminEmail("no-reply@motivitylabs.net");
+                req.setAdminPhoneNumber(masterAdminPhone);
+                req.setAdminFirstName(masterAdminFirstName);
+                req.setAdminLastName(masterAdminLastName);
+                req.setAdminUserName(masterAdminUsername);
+                req.setAdminEmail(masterAdminEmail);
 
                 tenantService.createTenant(req);
 
