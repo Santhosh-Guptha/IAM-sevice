@@ -254,12 +254,52 @@ public class TenantService {
         User admin = new User();
         admin.setFirstName(req.getAdminFirstName());
         admin.setLastName(req.getAdminLastName());
-        admin.setUserName(req.getAdminUserName());
+        String generatedUsername = generateUniqueUsername(req.getAdminFirstName(), req.getAdminLastName());
+        admin.setUserName(generatedUsername);
         admin.setEmail(req.getAdminEmail());
         admin.setPhoneNo(req.getAdminPhoneNumber());
         admin.setTenant(tenant);
         admin.setDefaultUser(true);
         return admin;
+    }
+
+    private String generateUniqueUsername(String first, String last) {
+        String f = first == null ? "" : first.trim().toLowerCase().replaceAll("[^a-z]", "");
+        String l = last == null ? "" : last.trim().toLowerCase().replaceAll("[^a-z]", "");
+        if (f.isEmpty() && l.isEmpty()) {
+            f = "user";
+        }
+        Random rnd = new Random();
+        for (int attempt = 0; attempt < 200; attempt++) {
+            int targetLen = 5 + rnd.nextInt(4); // 5..8
+            String base = (f + l);
+            if (base.isEmpty()) base = "user";
+            int namePartLen = Math.max(1, targetLen - 1); // reserve 1 digit
+            String namePart;
+            if (base.length() <= namePartLen) {
+                namePart = base;
+            } else {
+                int start = rnd.nextInt(base.length() - namePartLen + 1);
+                namePart = base.substring(start, start + namePartLen);
+            }
+            int digit = rnd.nextInt(10);
+            String candidate = (namePart + digit).replaceAll("[^a-z0-9]", "");
+            // pad if too short
+            while (candidate.length() < targetLen) {
+                candidate = candidate + (char) ('a' + rnd.nextInt(26));
+            }
+            if (!Character.isLetter(candidate.charAt(0))) {
+                candidate = "u" + candidate;
+            }
+            if (candidate.length() > 8) {
+                candidate = candidate.substring(0, 8);
+            }
+            if (candidate.length() < 5) continue;
+            if (!userRepository.findByUserName(candidate).isPresent()) {
+                return candidate;
+            }
+        }
+        throw new KeycloakOperationException("USERNAME_GENERATION_FAILED", 1020, "Unable to generate unique username.");
     }
 
     // ============================================================================ RESUME FLOW
