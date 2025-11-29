@@ -5,12 +5,11 @@ import com.secufusion.iam.dto.TenantResponse;
 import com.secufusion.iam.entity.*;
 import com.secufusion.iam.exception.KeycloakOperationException;
 import com.secufusion.iam.exception.ResourceNotFoundException;
-import com.secufusion.iam.repository.AuthProviderConfigRepository;
-import com.secufusion.iam.repository.TenantRepository;
-import com.secufusion.iam.repository.TenantTypeRepository;
-import com.secufusion.iam.repository.UserRepository;
+import com.secufusion.iam.repository.*;
+import com.secufusion.iam.util.JwtUtl;
 import com.secufusion.iam.util.KeycloakAdminUtil;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.ws.rs.WebApplicationException;
 
 import org.keycloak.representations.idm.ClientRepresentation;
@@ -29,6 +28,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.text.ParseException;
 import java.time.Instant;
 import java.util.*;
 
@@ -67,6 +67,22 @@ public class TenantService {
     @Autowired
     private RoleService roleService;
 
+    @Autowired
+    private RegionRepository regionRepository;
+
+    @Autowired
+    private CountryRepository countryRepository;
+
+    @Autowired
+    private StatesRepository stateRepository;
+
+    @Autowired
+    private CityRepository cityRepository;
+
+    @Autowired
+    private JwtUtl jwtUtl;
+
+
     @Value("${keycloak.admin.server-url}")
     private String baseUrl;
 
@@ -101,7 +117,10 @@ public class TenantService {
     // ============================================================================ CREATE (RESUMABLE FLOW)
 
     @Transactional
-    public TenantResponse createTenant(CreateTenantRequest req) {
+    public TenantResponse createTenant(HttpServletRequest request, CreateTenantRequest req){
+
+        Tenant parentTenant = jwtUtl.getTenantFromEmail(request);
+
         log.info("Starting createTenant for realm='{}'", req.getTenantName());
 
         Optional<Tenant> existingOpt = tenantRepository.findByTenantName(req.getTenantName());
@@ -132,6 +151,7 @@ public class TenantService {
         // Create tenant skeleton
         Tenant tenant = buildTenantSkeleton(req);
         tenant.setStatus("CREATING");
+        tenant.setParentTenantId(parentTenant.getTenantID());
         Tenant savedTenant = tenantRepository.save(tenant);
         log.info("Created tenant skeleton in DB. tenantId={}, status={}",
                 savedTenant.getTenantID(), savedTenant.getStatus());
@@ -140,6 +160,7 @@ public class TenantService {
         User admin = buildAdminSkeleton(req, savedTenant);
         admin.setStatus("CREATING");
         User savedUser = userRepository.save(admin);
+        req.setAdminUserName(savedUser.getUserName());
         log.info("Created admin user skeleton in DB. userId={}, username={}, status={}",
                 savedUser.getPkUserId(), savedUser.getUserName(), savedUser.getStatus());
 
@@ -197,34 +218,106 @@ public class TenantService {
         log.debug("Validating input for new tenant. tenantName={}, adminUserName={}, adminEmail={}, domain={}",
                 req.getTenantName(), req.getAdminUserName(), req.getAdminEmail(), req.getDomain());
 
-        if (tenantRepository.findByTenantName(req.getTenantName()).isPresent()) {
-            log.warn("Validation failed: tenant name already exists. tenantName={}", req.getTenantName());
-            throw new KeycloakOperationException("TENANT_ALREADY_EXISTS", 1001, "Tenant name already exists.");
-        }
+        // tenant name - required then existence
+                if (req.getTenantName() == null || req.getTenantName().trim().isEmpty()) {
+                    log.warn("Validation failed: tenant name is required.");
+                    throw new KeycloakOperationException("ORGANIZATION_NAME_REQUIRED", 1000, "Organization name is required.");
+                }
+                log.debug("Checking tenant name availability. tenantName={}", req.getTenantName());
+                if (tenantRepository.existsByTenantName(req.getTenantName())) {
+                    log.warn("Validation failed: tenant name already exists. tenantName={}", req.getTenantName());
+                    throw new KeycloakOperationException("ORGANIZATION_NAME_ALREADY_EXISTS", 1001, "Organization name already exists.");
+                }
 
-        String dbDomain = normalizeDomainForDB(req.getDomain());
-        boolean domainExists = tenantRepository.findAll().stream()
-                .anyMatch(t -> dbDomain.equalsIgnoreCase(t.getDomain()));
-        if (domainExists) {
-            log.warn("Validation failed: domain already exists. normalizedDomain={}", dbDomain);
-            throw new KeycloakOperationException("DOMAIN_ALREADY_EXISTS", 1002, "This domain is already registered.");
-        }
+                // domain - required then normalize & existence
+                if (req.getDomain() == null || req.getDomain().trim().isEmpty()) {
+                    log.warn("Validation failed: domain is required.");
+                    throw new KeycloakOperationException("INVALID_DOMAIN", 1007, "A valid domain must be provided.");
+                }
+                String dbDomain = normalizeDomainForDB(req.getDomain());
+                log.debug("Checking domain availability. normalizedDomain={}", dbDomain);
+                if (tenantRepository.existsByDomain(dbDomain)) {
+                    log.warn("Validation failed: domain already exists. normalizedDomain={}", dbDomain);
+                    throw new KeycloakOperationException("DOMAIN_ALREADY_EXISTS", 1002, "This domain is already registered.");
+                }
 
-        if (userRepository.findByUserName(req.getAdminUserName()).isPresent()) {
-            log.warn("Validation failed: username already taken. username={}", req.getAdminUserName());
-            throw new KeycloakOperationException("USERNAME_ALREADY_EXISTS", 1003, "Username already taken.");
-        }
+                // organization phone - required then existence
+                if (req.getPhoneNo() == null || req.getPhoneNo().trim().isEmpty()) {
+                    log.warn("Validation failed: organization phone number is required.");
+                    throw new KeycloakOperationException("ORGANIZATION_PHONE_NUMBER_REQUIRED", 1008, "Organization phone number is required.");
+                }
+                log.debug("Checking organization phone availability. phoneNo={}", req.getPhoneNo());
+                if (tenantRepository.existsByPhoneNo(req.getPhoneNo())) {
+                    log.warn("Validation failed: organization phone number already exists. phoneNo={}", req.getPhoneNo());
+                    throw new KeycloakOperationException("ORGANIZATION_PHONE_NUMBER_ALREADY_EXISTS", 1009, "Organization Phone number already exists.");
+                }
 
-        if (userRepository.findByEmail(req.getAdminEmail()).isPresent()) {
-            log.warn("Validation failed: email already exists. email={}", req.getAdminEmail());
-            throw new KeycloakOperationException("EMAIL_ALREADY_EXISTS", 1004, "Email already exists.");
-        }
+                // organization email - required then existence
+                if (req.getEmail() == null || req.getEmail().trim().isEmpty()) {
+                    log.warn("Validation failed: organization email is required.");
+                    throw new KeycloakOperationException("ORGANIZATION_EMAIL_REQUIRED", 1011, "Organization email is required.");
+                }
+                log.debug("Checking organization email availability. email={}", req.getEmail());
+                if (tenantRepository.existsByEmail(req.getEmail())) {
+                    log.warn("Validation failed: email already exists in tenant table. email={}", req.getEmail());
+                    throw new KeycloakOperationException("ORGANIZATION_EMAIL_ALREADY_EXISTS", 1012, "Organization email already exists.");
+                }
 
-        boolean realmExists = kcUtil.realmExists(req.getTenantName());
-        if (realmExists) {
-            log.warn("Validation failed: realm already exists in Keycloak. realm={}", req.getTenantName());
-            throw new KeycloakOperationException("REALM_ALREADY_EXISTS", 1005, "Realm already exists.");
-        }
+                // admin username - (kept commented as before)
+        //        if (req.getAdminUserName() == null || req.getAdminUserName().trim().isEmpty()) {
+        //            log.warn("Validation failed: admin username is required.");
+        //            throw new KeycloakOperationException("ADMIN_USERNAME_REQUIRED", 1006, "Admin username is required.");
+        //        }
+        //        if (userRepository.findByUserName(req.getAdminUserName()).isPresent()) {
+        //            log.warn("Validation failed: username already taken. username={}", req.getAdminUserName());
+        //            throw new KeycloakOperationException("ADMIN_USERNAME_ALREADY_EXISTS", 1003, "Admin Username already taken.");
+        //        }
+
+                // admin email - required then existence
+                if (req.getAdminEmail() == null || req.getAdminEmail().trim().isEmpty()) {
+                    log.warn("Validation failed: admin email is required.");
+                    throw new KeycloakOperationException("ADMIN_EMAIL_REQUIRED", 1007, "Admin email is required.");
+                }
+                log.debug("Checking admin email availability. adminEmail={}", req.getAdminEmail());
+                if (userRepository.findByEmail(req.getAdminEmail()).isPresent()) {
+                    log.warn("Validation failed: email already exists. email={}", req.getAdminEmail());
+                    throw new KeycloakOperationException("ADMIN_EMAIL_ALREADY_EXISTS", 1004, "Admin Email already exists.");
+                }
+
+                // admin phone - required then existence
+                if (req.getAdminPhoneNumber() == null || req.getAdminPhoneNumber().trim().isEmpty()) {
+                    log.warn("Validation failed: admin phone number is required.");
+                    throw new KeycloakOperationException("ADMIN_PHONE_NUMBER_REQUIRED", 1017, "Admin phone number is required.");
+                }
+                log.debug("Checking admin phone availability. adminPhone={}", req.getAdminPhoneNumber());
+                if (userRepository.findByPhoneNo(req.getAdminPhoneNumber()).isPresent()) {
+                    log.warn("Validation failed: admin phone number already exists. phoneNo={}", req.getAdminPhoneNumber());
+                    throw new KeycloakOperationException("ADMIN_PHONE_NUMBER_ALREADY_EXISTS", 1016, "Admin Phone number already exists.");
+                }
+
+                // region/country/state/city validation (unchanged)
+                boolean b = regionRepository.existsRegionCountryStateCity(
+                        req.getRegion(),
+                        req.getPermanentAddress() != null ? req.getPermanentAddress().getCountry() : null,
+                        req.getPermanentAddress() != null ? req.getPermanentAddress().getState() : null,
+                        req.getPermanentAddress() != null ? req.getPermanentAddress().getCity() : null
+                );
+                if (!b) {
+                    log.warn("Validation failed: region/country/state/city combination is invalid. region={}, country={}, state={}, city={}",
+                            req.getRegion(),
+                            req.getPermanentAddress() != null ? req.getPermanentAddress().getCountry() : null,
+                            req.getPermanentAddress() != null ? req.getPermanentAddress().getState() : null,
+                            req.getPermanentAddress() != null ? req.getPermanentAddress().getCity() : null);
+        //            throw new KeycloakOperationException("INVALID_REGION_COUNTRY_STATE_CITY", 1021,
+        //                    "The combination of region, country, state, and city is invalid.");
+                }
+
+                // final: check Keycloak realm existence
+                boolean realmExists = kcUtil.realmExists(req.getTenantName());
+                if (realmExists) {
+                    log.warn("Validation failed: realm already exists in Keycloak. realm={}", req.getTenantName());
+                    throw new KeycloakOperationException("ORGANIZATION_REALM_ALREADY_EXISTS", 1005, "Organization Realm already exists.");
+                }
 
         log.debug("Validation for new tenant passed. tenantName={}", req.getTenantName());
     }
@@ -254,12 +347,57 @@ public class TenantService {
         User admin = new User();
         admin.setFirstName(req.getAdminFirstName());
         admin.setLastName(req.getAdminLastName());
-        admin.setUserName(req.getAdminUserName());
+        String generatedUsername;
+        if (req.getAdminUserName() != null && !req.getAdminUserName().trim().isEmpty()) {
+            generatedUsername = req.getAdminUserName().trim().toLowerCase();
+        } else {
+            generatedUsername = generateUniqueUsername(req.getAdminFirstName(), req.getAdminLastName());
+        }
+        admin.setUserName(generatedUsername);
         admin.setEmail(req.getAdminEmail());
         admin.setPhoneNo(req.getAdminPhoneNumber());
         admin.setTenant(tenant);
         admin.setDefaultUser(true);
         return admin;
+    }
+
+    private String generateUniqueUsername(String first, String last) {
+        String f = first == null ? "" : first.trim().toLowerCase().replaceAll("[^a-z]", "");
+        String l = last == null ? "" : last.trim().toLowerCase().replaceAll("[^a-z]", "");
+        if (f.isEmpty() && l.isEmpty()) {
+            f = "user";
+        }
+        Random rnd = new Random();
+        for (int attempt = 0; attempt < 200; attempt++) {
+            int targetLen = 5 + rnd.nextInt(4); // 5..8
+            String base = (f + l);
+            if (base.isEmpty()) base = "user";
+            int namePartLen = Math.max(1, targetLen - 1); // reserve 1 digit
+            String namePart;
+            if (base.length() <= namePartLen) {
+                namePart = base;
+            } else {
+                int start = rnd.nextInt(base.length() - namePartLen + 1);
+                namePart = base.substring(start, start + namePartLen);
+            }
+            int digit = rnd.nextInt(10);
+            String candidate = (namePart + digit).replaceAll("[^a-z0-9]", "");
+            // pad if too short
+            while (candidate.length() < targetLen) {
+                candidate = candidate + (char) ('a' + rnd.nextInt(26));
+            }
+            if (!Character.isLetter(candidate.charAt(0))) {
+                candidate = "u" + candidate;
+            }
+            if (candidate.length() > 8) {
+                candidate = candidate.substring(0, 8);
+            }
+            if (candidate.length() < 5) continue;
+            if (!userRepository.findByUserName(candidate).isPresent()) {
+                return candidate;
+            }
+        }
+        throw new KeycloakOperationException("USERNAME_GENERATION_FAILED", 1020, "Unable to generate unique username.");
     }
 
     // ============================================================================ RESUME FLOW
@@ -430,7 +568,8 @@ public class TenantService {
                     req.getAdminUserName(),
                     req.getAdminEmail(),
                     req.getAdminFirstName(),
-                    req.getAdminLastName()
+                    req.getAdminLastName(),
+                    req.getAdminPassword() != null && !req.getAdminPassword().trim().isEmpty()
             );
 
             // kcUtil.createUser returns null on conflict in this util, but we already checked above.
@@ -439,9 +578,19 @@ public class TenantService {
                         "Unable to create tenant admin user (conflict).");
             }
 
-            // Trigger required actions: UPDATE_PASSWORD, VERIFY_EMAIL (no password set)
-            kcUtil.sendRequiredActionEmail(req.getTenantName(), createdUserId, List.of("UPDATE_PASSWORD", "VERIFY_EMAIL"));
-
+           // Trigger required actions: if admin password provided, set it and only VERIFY_EMAIL; otherwise require UPDATE_PASSWORD + VERIFY_EMAIL
+           String adminPassword = req.getAdminPassword();
+           if (adminPassword != null && !adminPassword.trim().isEmpty()) {
+               try {
+                   kcUtil.setPassword(req.getTenantName(), createdUserId, adminPassword, false);
+                   kcUtil.sendRequiredActionEmail(req.getTenantName(), createdUserId, List.of("VERIFY_EMAIL"));
+               } catch (Exception e) {
+                   log.error("Failed to set password or send verify email for user {}: {}", createdUserId, e.getMessage(), e);
+                   throw new KeycloakOperationException("USER_CONFIG_FAILED", 1010, "Unable to configure tenant admin user.");
+               }
+           } else {
+               kcUtil.sendRequiredActionEmail(req.getTenantName(), createdUserId, List.of("UPDATE_PASSWORD", "VERIFY_EMAIL"));
+           }
             // Assign realm-admin role
             kcUtil.assignRealmAdminRole(req.getTenantName(), createdUserId);
 
@@ -601,14 +750,17 @@ public class TenantService {
 
     // ============================================================================ CRUD / LISTS
 
-    @Transactional
-    public TenantResponse updateTenant(String id, CreateTenantRequest req) {
+   @Transactional
+    public TenantResponse updateTenant(HttpServletRequest request, String id, CreateTenantRequest req) {
         log.info("Updating tenant. tenantId={}, newTenantName={}", id, req.getTenantName());
         Tenant t = tenantRepository.findById(id)
                 .orElseThrow(() -> {
                     log.warn("Tenant not found for update. tenantId={}", id);
                     return new ResourceNotFoundException("Tenant not found: " + id);
                 });
+
+        // authorize: only parent (or the same tenant) can perform updates
+        ensureRequesterIsParentOrSelf(request, t);
 
         t.setTenantName(req.getTenantName());
         t.setRealmName(req.getTenantName());
@@ -624,6 +776,32 @@ public class TenantService {
         tenantRepository.save(t);
         log.info("Tenant updated successfully. tenantId={}", id);
         return buildResponse(t);
+    }
+
+    private void ensureRequesterIsParentOrSelf(HttpServletRequest request, Tenant target) {
+        Tenant requester = jwtUtl.getTenantFromEmail(request);
+        log.debug("Authorizing update. requesterTenantId={}, targetTenantId={}",
+                requester != null ? requester.getTenantID() : "null", target.getTenantID());
+
+        // allow if requester is the same tenant
+        if (requester != null && requester.getTenantID().equals(target.getTenantID())) {
+            return;
+        }
+
+        // traverse upwards from target through parentTenantId chain to see if requester is an ancestor
+        String currentParentId = target.getParentTenantId();
+        while (currentParentId != null && !currentParentId.isBlank()) {
+            if (requester != null && currentParentId.equals(requester.getTenantID())) {
+                return;
+            }
+            Optional<Tenant> parentOpt = tenantRepository.findByTenantID(currentParentId);
+            if (parentOpt.isEmpty()) break;
+            currentParentId = parentOpt.get().getParentTenantId();
+        }
+
+        log.warn("Access denied: requester tenantId={} is not an ancestor of tenantId={}",
+                requester != null ? requester.getTenantID() : "null", target.getTenantID());
+        throw new KeycloakOperationException("ACCESS_DENIED", 1022, "Access denied to tenant.");
     }
 
     @Transactional
@@ -653,31 +831,103 @@ public class TenantService {
         log.info("Tenant deleted successfully from DB. tenantId={}", id);
     }
 
-    @Transactional
-    public TenantResponse getTenant(String id) {
-        log.info("Fetching tenant by ID. tenantId={}", id);
-        Tenant t = tenantRepository.findByTenantID(id)
-                .orElseThrow(() -> {
-                    log.warn("Tenant not found by ID. tenantId={}", id);
-                    return new ResourceNotFoundException("Tenant not found: " + id);
-                });
-        return buildResponse(t);
-    }
+ @Transactional
+ public TenantResponse getTenant(String id) {
+     log.info("Fetching tenant by ID. tenantId={}", id);
+     Tenant t = tenantRepository.findByTenantID(id)
+             .orElseThrow(() -> {
+                 log.warn("Tenant not found by ID. tenantId={}", id);
+                 return new ResourceNotFoundException("Tenant not found: " + id);
+             });
+     return buildResponse(t);
+ }
 
+ @Transactional
+ public TenantResponse getTenantIfParent(HttpServletRequest request, String id) {
+     Tenant requester = jwtUtl.getTenantFromEmail(request);
+     log.info("Fetching tenant by ID with parent-hierarchy check. requesterTenantId={}, targetTenantId={}",
+             requester != null ? requester.getTenantID() : "null", id);
+
+     Tenant target = tenantRepository.findByTenantID(id)
+             .orElseThrow(() -> {
+                 log.warn("Tenant not found by ID. tenantId={}", id);
+                 return new ResourceNotFoundException("Tenant not found: " + id);
+             });
+
+     // allow if requester is the same tenant
+     if (requester != null && requester.getTenantID().equals(target.getTenantID())) {
+         return buildResponse(target);
+     }
+
+     // traverse upwards from target through parentTenantId chain to see if requester is an ancestor
+     String currentParentId = target.getParentTenantId();
+     while (currentParentId != null && !currentParentId.isBlank()) {
+         if (requester != null && currentParentId.equals(requester.getTenantID())) {
+             return buildResponse(target);
+         }
+         Optional<Tenant> parentOpt = tenantRepository.findByTenantID(currentParentId);
+         if (parentOpt.isEmpty()) break;
+         currentParentId = parentOpt.get().getParentTenantId();
+     }
+
+     log.warn("Access denied: requester tenantId={} is not an ancestor of tenantId={}",
+             requester != null ? requester.getTenantID() : "null", id);
+     throw new KeycloakOperationException("ACCESS_DENIED", 1022, "Access denied to tenant.");
+ }
     @Transactional
-    public List<Tenant> getAllTenants() {
-        log.info("Fetching all tenants.");
-        List<Tenant> tenants = tenantRepository.findAll();
+    public List<TenantResponse> getAllTenants(HttpServletRequest request) {
+        Tenant parentTenant = jwtUtl.getTenantFromEmail(request);
+        List<Tenant> tenants = tenantRepository.findByParentTenantId(parentTenant.getTenantID());
         log.debug("Fetched {} tenants from DB.", tenants.size());
-        return tenants;
+        List<TenantResponse> responses = tenants.stream()
+                .map(this::buildResponse)
+                .collect(java.util.stream.Collectors.toList());
+        log.debug("Converted {} tenants to TenantResponse.", responses.size());
+        return responses;
     }
 
     @Transactional
-    public List<TenantType> getAllTenantTypes() {
+    public List<TenantType> getAllTenantTypes(HttpServletRequest request) {
+        Tenant tenantFromEmail = jwtUtl.getTenantFromEmail(request);
         log.info("Fetching all tenant types.");
         List<TenantType> types = tenantTypeRepository.findAll();
         log.debug("Fetched {} tenant types from DB.", types.size());
         return types;
+    }
+
+    @Transactional
+    public List<TenantType> getTenantTypesByTenantType(HttpServletRequest request) {
+        Tenant tenantFromEmail = jwtUtl.getTenantFromEmail(request);
+        log.info("Fetching tenant types for tenantId={}, tenantType={}",
+                tenantFromEmail.getTenantID(), tenantFromEmail.getTenantType());
+
+        List<TenantType> types = tenantTypeRepository.findAll();
+        log.debug("Fetched {} tenant types from DB.", types.size());
+
+        String tenantType = tenantFromEmail.getTenantType();
+        if (tenantType == null) {
+            return Collections.emptyList();
+        }
+
+        switch (tenantType.trim().toLowerCase(Locale.ROOT)) {
+            case "master mssp":
+            case "master_mssp":
+            case "mastermssp":
+                // show remaining 2 (exclude master)
+                return types.stream()
+                        .filter(t -> ! "master mssp".equalsIgnoreCase(t.getTenantTypeName()))
+                        .collect(java.util.stream.Collectors.toList());
+            case "mssp":
+                // show enterprise only
+                return types.stream()
+                        .filter(t -> "enterprise".equalsIgnoreCase(t.getTenantTypeName()))
+                        .collect(java.util.stream.Collectors.toList());
+            case "enterprise":
+                // enterprise -> none
+                return Collections.emptyList();
+            default:
+                return types;
+        }
     }
 
     @Transactional
@@ -735,6 +985,30 @@ public class TenantService {
             return "Email already exists.";
         } else {
             return "Email is available.";
+        }
+    }
+
+    public List<TenantResponse> getTenantHierarchy(HttpServletRequest request) {
+        Tenant parentTenant = jwtUtl.getTenantFromEmail(request);
+        String tenantId = parentTenant.getTenantID();
+        List<Tenant> result = new ArrayList<>();
+
+        // Start recursive search
+        collectChildren(tenantId, result);
+
+        List<TenantResponse> responses = result.stream()
+                .map(this::buildResponse)
+                .collect(java.util.stream.Collectors.toList());
+        log.debug("Converted {} tenants to TenantResponse.", responses.size());
+        return responses;
+    }
+
+    private void collectChildren(String tenantId, List<Tenant> result) {
+        List<Tenant> children = tenantRepository.findByParentTenantId(tenantId);
+
+        for (Tenant child : children) {
+            result.add(child);
+            collectChildren(child.getTenantID(), result); // recursive
         }
     }
 }

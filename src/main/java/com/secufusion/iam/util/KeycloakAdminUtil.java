@@ -1,5 +1,6 @@
 package com.secufusion.iam.util;
 
+import com.secufusion.iam.exception.KeycloakOperationException;
 import jakarta.ws.rs.core.Response;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -122,16 +123,21 @@ public class KeycloakAdminUtil {
     // ============================================================
     // USER OPERATIONS
     // ============================================================
-    public String createUser(String realm, String username, String email, String firstName, String lastName) {
+    public String createUser(String realm, String username, String email, String firstName, String lastName, boolean emailVerified) {
         log.info("Creating Keycloak user in realm='{}' username='{}'", realm, username);
 
+        findUsersByUsernameOrEmail(realm, username, email).forEach(u -> {
+            log.warn("User with same username/email already exists in realm='{}': userId='{}', username='{}', email='{}'",
+                    realm, u.getId(), u.getUsername(), u.getEmail());
+            throw new KeycloakOperationException("USER_ALREADY_EXISTS", 409,"User with same username/email already exists in realm");
+        });
         UserRepresentation user = new UserRepresentation();
         user.setUsername(username);
         user.setEmail(email);
         user.setFirstName(firstName);
         user.setLastName(lastName);
         user.setEnabled(true);
-        user.setEmailVerified(false);
+        user.setEmailVerified(emailVerified);
 
         try {
             Response response = keycloak.realm(realm).users().create(user);
