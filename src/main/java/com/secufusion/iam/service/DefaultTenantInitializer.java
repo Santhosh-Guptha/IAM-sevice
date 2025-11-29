@@ -8,6 +8,7 @@ import com.secufusion.iam.entity.User;
 import com.secufusion.iam.repository.GroupsRepository;
 import com.secufusion.iam.repository.TenantRepository;
 import com.secufusion.iam.repository.UserRepository;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -82,7 +83,8 @@ public class DefaultTenantInitializer {
                 req.setAdminUserName(masterAdminUsername);
                 req.setAdminEmail(masterAdminEmail);
 
-                tenantService.createTenant(req);
+                HttpServletRequest httpServletRequest = null;
+                tenantService.createTenant(null, req);
 
                 tenant = tenantRepository.findByTenantName(defaultTenantName)
                         .orElseThrow(() -> new RuntimeException("Tenant creation failed !"));

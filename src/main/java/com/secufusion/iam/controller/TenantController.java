@@ -2,15 +2,16 @@ package com.secufusion.iam.controller;
 
 import com.secufusion.iam.dto.CreateTenantRequest;
 import com.secufusion.iam.dto.TenantResponse;
-import com.secufusion.iam.entity.Tenant;
 import com.secufusion.iam.entity.TenantType;
 import com.secufusion.iam.service.TenantService;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.text.ParseException;
 import java.util.List;
 import java.util.Map;
 
@@ -25,25 +26,25 @@ public class TenantController {
 
 
     @PostMapping
-    public ResponseEntity<TenantResponse> createTenant(@Valid @RequestBody CreateTenantRequest req) {
+    public ResponseEntity<TenantResponse> createTenant(HttpServletRequest request, @Valid @RequestBody CreateTenantRequest req) {
         log.info("Request to create tenant realm={}", req.getTenantName());
-        TenantResponse resp = tenantService.createTenant(req);
+        TenantResponse resp = tenantService.createTenant(request,req);
         return ResponseEntity.ok(resp);
     }
 
     @GetMapping("/id")
-    public ResponseEntity<TenantResponse> getTenant(@RequestParam String id) {
-        return ResponseEntity.ok(tenantService.getTenant(id));
+    public ResponseEntity<TenantResponse> getTenant(HttpServletRequest request, @RequestParam String id) {
+        return ResponseEntity.ok(tenantService.getTenantIfParent(request, id));
     }
 
     @GetMapping
-    public ResponseEntity<List<Tenant>> getAll(){
-        return ResponseEntity.ok(tenantService.getAllTenants());
+    public ResponseEntity<List<TenantResponse>> getAll(HttpServletRequest request){
+        return ResponseEntity.ok(tenantService.getTenantHierarchy(request));
     }
 
     @PutMapping("/{id}")
-    public ResponseEntity<TenantResponse> updateTenant(@PathVariable String id, @Valid @RequestBody CreateTenantRequest req) {
-        return ResponseEntity.ok(tenantService.updateTenant(id, req));
+    public ResponseEntity<TenantResponse> updateTenant(HttpServletRequest request, @PathVariable String id, @Valid @RequestBody CreateTenantRequest req) {
+        return ResponseEntity.ok(tenantService.updateTenant(request, id, req));
     }
 
     @DeleteMapping("/{id}")
@@ -53,8 +54,8 @@ public class TenantController {
     }
 
     @GetMapping("/types")
-    public ResponseEntity<List<TenantType>> getAllTenantTypes(){
-        return ResponseEntity.ok(tenantService.getAllTenantTypes());
+    public ResponseEntity<List<TenantType>> getAllTenantTypes(HttpServletRequest request){
+        return ResponseEntity.ok(tenantService.getTenantTypesByTenantType(request));
     }
 
     @GetMapping("/billing")
@@ -91,4 +92,5 @@ public class TenantController {
 
         return ResponseEntity.badRequest().body("");
     }
+
 }

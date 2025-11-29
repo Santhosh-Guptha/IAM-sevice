@@ -6,8 +6,10 @@ import com.secufusion.iam.entity.*;
 import com.secufusion.iam.exception.KeycloakOperationException;
 import com.secufusion.iam.exception.ResourceNotFoundException;
 import com.secufusion.iam.repository.*;
+import com.secufusion.iam.util.JwtUtl;
 import com.secufusion.iam.util.KeycloakAdminUtil;
 
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.ws.rs.WebApplicationException;
 
 import org.keycloak.representations.idm.ClientRepresentation;
@@ -26,6 +28,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.text.ParseException;
 import java.time.Instant;
 import java.util.*;
 
@@ -76,6 +79,9 @@ public class TenantService {
     @Autowired
     private CityRepository cityRepository;
 
+    @Autowired
+    private JwtUtl jwtUtl;
+
 
     @Value("${keycloak.admin.server-url}")
     private String baseUrl;
@@ -111,7 +117,10 @@ public class TenantService {
     // ============================================================================ CREATE (RESUMABLE FLOW)
 
     @Transactional
-    public TenantResponse createTenant(CreateTenantRequest req) {
+    public TenantResponse createTenant(HttpServletRequest request, CreateTenantRequest req){
+
+        Tenant parentTenant = jwtUtl.getTenantFromEmail(request);
+
         log.info("Starting createTenant for realm='{}'", req.getTenantName());
 
         Optional<Tenant> existingOpt = tenantRepository.findByTenantName(req.getTenantName());
@@ -142,6 +151,7 @@ public class TenantService {
         // Create tenant skeleton
         Tenant tenant = buildTenantSkeleton(req);
         tenant.setStatus("CREATING");
+        tenant.setParentTenantId(parentTenant.getTenantID());
         Tenant savedTenant = tenantRepository.save(tenant);
         log.info("Created tenant skeleton in DB. tenantId={}, status={}",
                 savedTenant.getTenantID(), savedTenant.getStatus());
@@ -740,14 +750,17 @@ public class TenantService {
 
     // ============================================================================ CRUD / LISTS
 
-    @Transactional
-    public TenantResponse updateTenant(String id, CreateTenantRequest req) {
+   @Transactional
+    public TenantResponse updateTenant(HttpServletRequest request, String id, CreateTenantRequest req) {
         log.info("Updating tenant. tenantId={}, newTenantName={}", id, req.getTenantName());
         Tenant t = tenantRepository.findById(id)
                 .orElseThrow(() -> {
                     log.warn("Tenant not found for update. tenantId={}", id);
                     return new ResourceNotFoundException("Tenant not found: " + id);
                 });
+
+        // authorize: only parent (or the same tenant) can perform updates
+        ensureRequesterIsParentOrSelf(request, t);
 
         t.setTenantName(req.getTenantName());
         t.setRealmName(req.getTenantName());
@@ -763,6 +776,32 @@ public class TenantService {
         tenantRepository.save(t);
         log.info("Tenant updated successfully. tenantId={}", id);
         return buildResponse(t);
+    }
+
+    private void ensureRequesterIsParentOrSelf(HttpServletRequest request, Tenant target) {
+        Tenant requester = jwtUtl.getTenantFromEmail(request);
+        log.debug("Authorizing update. requesterTenantId={}, targetTenantId={}",
+                requester != null ? requester.getTenantID() : "null", target.getTenantID());
+
+        // allow if requester is the same tenant
+        if (requester != null && requester.getTenantID().equals(target.getTenantID())) {
+            return;
+        }
+
+        // traverse upwards from target through parentTenantId chain to see if requester is an ancestor
+        String currentParentId = target.getParentTenantId();
+        while (currentParentId != null && !currentParentId.isBlank()) {
+            if (requester != null && currentParentId.equals(requester.getTenantID())) {
+                return;
+            }
+            Optional<Tenant> parentOpt = tenantRepository.findByTenantID(currentParentId);
+            if (parentOpt.isEmpty()) break;
+            currentParentId = parentOpt.get().getParentTenantId();
+        }
+
+        log.warn("Access denied: requester tenantId={} is not an ancestor of tenantId={}",
+                requester != null ? requester.getTenantID() : "null", target.getTenantID());
+        throw new KeycloakOperationException("ACCESS_DENIED", 1022, "Access denied to tenant.");
     }
 
     @Transactional
@@ -792,31 +831,103 @@ public class TenantService {
         log.info("Tenant deleted successfully from DB. tenantId={}", id);
     }
 
-    @Transactional
-    public TenantResponse getTenant(String id) {
-        log.info("Fetching tenant by ID. tenantId={}", id);
-        Tenant t = tenantRepository.findByTenantID(id)
-                .orElseThrow(() -> {
-                    log.warn("Tenant not found by ID. tenantId={}", id);
-                    return new ResourceNotFoundException("Tenant not found: " + id);
-                });
-        return buildResponse(t);
-    }
+ @Transactional
+ public TenantResponse getTenant(String id) {
+     log.info("Fetching tenant by ID. tenantId={}", id);
+     Tenant t = tenantRepository.findByTenantID(id)
+             .orElseThrow(() -> {
+                 log.warn("Tenant not found by ID. tenantId={}", id);
+                 return new ResourceNotFoundException("Tenant not found: " + id);
+             });
+     return buildResponse(t);
+ }
 
+ @Transactional
+ public TenantResponse getTenantIfParent(HttpServletRequest request, String id) {
+     Tenant requester = jwtUtl.getTenantFromEmail(request);
+     log.info("Fetching tenant by ID with parent-hierarchy check. requesterTenantId={}, targetTenantId={}",
+             requester != null ? requester.getTenantID() : "null", id);
+
+     Tenant target = tenantRepository.findByTenantID(id)
+             .orElseThrow(() -> {
+                 log.warn("Tenant not found by ID. tenantId={}", id);
+                 return new ResourceNotFoundException("Tenant not found: " + id);
+             });
+
+     // allow if requester is the same tenant
+     if (requester != null && requester.getTenantID().equals(target.getTenantID())) {
+         return buildResponse(target);
+     }
+
+     // traverse upwards from target through parentTenantId chain to see if requester is an ancestor
+     String currentParentId = target.getParentTenantId();
+     while (currentParentId != null && !currentParentId.isBlank()) {
+         if (requester != null && currentParentId.equals(requester.getTenantID())) {
+             return buildResponse(target);
+         }
+         Optional<Tenant> parentOpt = tenantRepository.findByTenantID(currentParentId);
+         if (parentOpt.isEmpty()) break;
+         currentParentId = parentOpt.get().getParentTenantId();
+     }
+
+     log.warn("Access denied: requester tenantId={} is not an ancestor of tenantId={}",
+             requester != null ? requester.getTenantID() : "null", id);
+     throw new KeycloakOperationException("ACCESS_DENIED", 1022, "Access denied to tenant.");
+ }
     @Transactional
-    public List<Tenant> getAllTenants() {
-        log.info("Fetching all tenants.");
-        List<Tenant> tenants = tenantRepository.findAll();
+    public List<TenantResponse> getAllTenants(HttpServletRequest request) {
+        Tenant parentTenant = jwtUtl.getTenantFromEmail(request);
+        List<Tenant> tenants = tenantRepository.findByParentTenantId(parentTenant.getTenantID());
         log.debug("Fetched {} tenants from DB.", tenants.size());
-        return tenants;
+        List<TenantResponse> responses = tenants.stream()
+                .map(this::buildResponse)
+                .collect(java.util.stream.Collectors.toList());
+        log.debug("Converted {} tenants to TenantResponse.", responses.size());
+        return responses;
     }
 
     @Transactional
-    public List<TenantType> getAllTenantTypes() {
+    public List<TenantType> getAllTenantTypes(HttpServletRequest request) {
+        Tenant tenantFromEmail = jwtUtl.getTenantFromEmail(request);
         log.info("Fetching all tenant types.");
         List<TenantType> types = tenantTypeRepository.findAll();
         log.debug("Fetched {} tenant types from DB.", types.size());
         return types;
+    }
+
+    @Transactional
+    public List<TenantType> getTenantTypesByTenantType(HttpServletRequest request) {
+        Tenant tenantFromEmail = jwtUtl.getTenantFromEmail(request);
+        log.info("Fetching tenant types for tenantId={}, tenantType={}",
+                tenantFromEmail.getTenantID(), tenantFromEmail.getTenantType());
+
+        List<TenantType> types = tenantTypeRepository.findAll();
+        log.debug("Fetched {} tenant types from DB.", types.size());
+
+        String tenantType = tenantFromEmail.getTenantType();
+        if (tenantType == null) {
+            return Collections.emptyList();
+        }
+
+        switch (tenantType.trim().toLowerCase(Locale.ROOT)) {
+            case "master mssp":
+            case "master_mssp":
+            case "mastermssp":
+                // show remaining 2 (exclude master)
+                return types.stream()
+                        .filter(t -> ! "master mssp".equalsIgnoreCase(t.getTenantTypeName()))
+                        .collect(java.util.stream.Collectors.toList());
+            case "mssp":
+                // show enterprise only
+                return types.stream()
+                        .filter(t -> "enterprise".equalsIgnoreCase(t.getTenantTypeName()))
+                        .collect(java.util.stream.Collectors.toList());
+            case "enterprise":
+                // enterprise -> none
+                return Collections.emptyList();
+            default:
+                return types;
+        }
     }
 
     @Transactional
@@ -874,6 +985,30 @@ public class TenantService {
             return "Email already exists.";
         } else {
             return "Email is available.";
+        }
+    }
+
+    public List<TenantResponse> getTenantHierarchy(HttpServletRequest request) {
+        Tenant parentTenant = jwtUtl.getTenantFromEmail(request);
+        String tenantId = parentTenant.getTenantID();
+        List<Tenant> result = new ArrayList<>();
+
+        // Start recursive search
+        collectChildren(tenantId, result);
+
+        List<TenantResponse> responses = result.stream()
+                .map(this::buildResponse)
+                .collect(java.util.stream.Collectors.toList());
+        log.debug("Converted {} tenants to TenantResponse.", responses.size());
+        return responses;
+    }
+
+    private void collectChildren(String tenantId, List<Tenant> result) {
+        List<Tenant> children = tenantRepository.findByParentTenantId(tenantId);
+
+        for (Tenant child : children) {
+            result.add(child);
+            collectChildren(child.getTenantID(), result); // recursive
         }
     }
 }

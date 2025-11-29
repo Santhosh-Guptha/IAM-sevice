@@ -1,5 +1,6 @@
 package com.secufusion.iam.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonManagedReference;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
@@ -68,6 +69,7 @@ public class Tenant {
 
     /** One Tenant → Many Users */
     @OneToMany(mappedBy = "tenant", cascade = CascadeType.ALL, orphanRemoval = true)
+    @JsonIgnore
     private List<User> users;
 
 

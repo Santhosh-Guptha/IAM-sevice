@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
 import java.io.Serializable;
+import java.util.List;
 import java.util.Optional;
 
 @Repository
@@ -27,4 +28,7 @@ public interface TenantRepository extends JpaRepository<Tenant, Serializable> {
     boolean existsByEmail(String email);
 
 
+    Optional<Tenant> findByEmail(String email);
+
+    List<Tenant> findByParentTenantId(String parentTenantId);
 }
